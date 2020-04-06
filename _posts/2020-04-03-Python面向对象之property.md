@@ -1,7 +1,7 @@
 ---
 layout: post
 title: 'Python面向对象之property'
-data: 2020-04-03
+date: 2020-04-03
 author: tux
 tags: Python
 ---
