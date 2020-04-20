@@ -31,6 +31,7 @@ docker run --volume=/:/rootfs:ro --volume=/var/run:/var/run:rw \
   google/cadvisor:latest
 ```
 
+这里需要注意的是，上面cadvisor容器的启动参数并不是针对CentOSLinux发行版的启动参数。按照cadvisor文档的指导，需要增加`--privileged=true`和`--volume=/cgroup:/cgroup:ro`参数来启动，但加上这些参数后仍然报错。问题出在了`--volume=/var/run:/var/run:ro`这里，需要将`ro`只读改为`rw`，然后启动即可。关于其他Linux发行版的启动参数可参考文档https://github.com/google/cadvisor/blob/master/docs/running.md
 #### prometheus
 
 安装方法略过，可参考官网。这里说一下配置。可以采用两种组织配置文件的方式的一种：1.采用类似于nginx的include方式。当job较多的时候可采用这种方式，配置文件管理方便。2.将配置都写在同一个配置文件，即`prometheus.yml`。示例如下：
