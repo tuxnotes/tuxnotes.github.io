@@ -75,9 +75,6 @@ url is blocked requests to the local network are not allowed
 To prevent this type of exploitation from happening, starting with GitLab 10.6, all Webhook requests to the current GitLab instance server address and/or in a private network will be forbidden by default. That means that all requests made to 127.0.0.1, ::1 and 0.0.0.0, as well as IPv4 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 and IPv6 site-local (ffc0::/10) addresses won't be allowed.
 
 This behavior can be overridden by enabling the option "Allow requests to the local network from hooks and services" in the "Outbound requests" section inside the Admin area under Settings (/admin/application_settings):
-————————————————
-版权声明：本文为CSDN博主「xukangkang1hao」的原创文章，遵循CC 4.0 BY-SA版权协议，转载请附上原文出处链接及本声明。
-原文链接：https://blog.csdn.net/xukangkang1hao/java/article/details/80756085
 ```
 大概意思是从Gitlab10.6开始，为了防止这种类型的漏洞，默认情况下所有的对当前Gitlab实例服务器地址或者私有网络地址的webhook请求都会被禁止。但可通过开启`Outbound requests`中的`Allow requests to the local network from hooks and services`来关闭这种禁止行为。开启方法：
 
