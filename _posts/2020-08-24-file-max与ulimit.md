@@ -1,3 +1,10 @@
+---
+layout: post
+title: file-max与ulimit
+date: 2020-08-24
+author: tux
+tags: Linux, ulimit
+---
 # 先看serverfault解释
 
 file-max is the maximum File Descriptors (FD) enforced on a kernel level, which cannot be surpassed by all processes without increasing. The ulimit is enforced on a 
