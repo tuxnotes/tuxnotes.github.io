@@ -187,3 +187,25 @@ man bash， 找到说明ulimit的那一节：
     If the file descriptors are tcp sockets, etc, then you risk using up a large amount of memory for the socket buffers and other kernel objects; this memory is 
     not going to be swappable.
     另外要记得的是socket connection也是文件。 
+    
+# Need to “calculate” optimum ulimit and fs.file-max values according to my own server needs
+
+For fs.file-max, I think in almost all cases you can just leave it alone. If you are running a very busy server of some kind and actually running out of file handles, then you can increase it -- but the value you need to increase it to will depend on exactly what kind of server you are running and what the load on it is. In general you would just need to increase it until you don't run out of file handles any more, or until you realize you need more memory or more systems to handle the load. The gain from "tuning" things by reducing file-max below the default is so minimal as to not be worth thinking about -- my phone works fine with an fs-max value of 83588.
+
+By the way, the modern kernel already uses a rule of thumb to set file-max based on the amount of memory in the system; from fs/file_table.c in the 2.6 kernel:
+
+```c
+/*
+     * One file with associated inode and dcache is very roughly 1K.
+     * Per default don't use more than 10% of our memory for files. 
+     */ 
+
+    n = (mempages * (PAGE_SIZE / 1024)) / 10;
+    files_stat.max_files = max_t(unsigned long, n, NR_FILE);
+```
+
+and files_stat.max_files is the setting of fs.file-max; this ends up being about 100 for every 1MB of ram.
+
+ulimits of course are about limiting resources allocated by users or processes. If you have multiple users or another situation like that, 
+then you can decide how you want to divide up system resources and limit memory use, number of processes, etc. The definitive guide to the details 
+of the limits you can set is the setrlimit man page (and the kernel source, of course).
