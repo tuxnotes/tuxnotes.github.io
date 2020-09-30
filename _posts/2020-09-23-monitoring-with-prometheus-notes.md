@@ -219,3 +219,123 @@ Prometheus收集时间序列数据，它使用一个多维时间序列数据模�
 
 ### 2.3.1 指标名称
 
+时间序列名称，描述数据的一般性质——如website_visits_total网站访问的总数。
+
+名称包含ASCII字符、数字、下划线和冒号。
+
+### 2.3.2 标签
+
+标签为数据模型提供了维度。为特定时间序列添加上下文。如total_website_visits时间
+序列可以使用网站名称、请求IP或其他特殊标识的标签。Prometheus课在一个时间序列、一组时间序列或所有相关的时间序列上进行查询。
+
+#### 标签种类
+
+- 插桩标签(instrumentation label)：来自被监控的资源——如对于与HTTP相关的时间序列，标签可能会显示所使用的特定HTTP动词。这些标签在诸如客户端或exporter抓取前会被添加到时间序列中。
+- 目标标签(target label):更多地与架构相关——它们可能会识别时间序列所在的数据中。目标标签由Prometheus在抓取期间和之后添加。
+
+时间序列由名称和标签标识。尽管从技术上讲，名称本身也是名为__name__的标签。如果在
+时间序列中添加或更改标签，则Prometheus会将其视为新的时间序列。
+
+label可理解为键/值形式的标签，并且新的标签会创建新的时间序列。标签名称可以包含
+ASCII字符、数字和下划线。
+
+带有__前缀的标签名称保留给Prometheus内部使用。
+
+### 2.3.3 采样数据
+
+时间序列的真实值是采样(sample)的结果，包含两部分：
+- 一个float64类型的数值
+- 一个毫秒精度的时间戳
+
+### 2.3.4 符号表示
+
+Prometheus时间序列的符号表示如下：
+
+```
+<time_series_name>{<label_name>=<label_value>, ...}
+```
+
+例如，带有标签的total_website_visits时间序列可能如下：
+
+```
+total_website_visits{site="MegaApp", location="NJ", instance="webserver", job="web"}
+```
+
+如上所示，首先是时间序列名称，后面跟着一组键/值对标签。通常所有时间序列都有一个
+instance标签(标识源主机或应用程序)以及一个job标签(包好抓取特定时间序列的作业名称)。
+
+这与OpenTSDB使用的符号大致相同，受到了Borgmon的影响。
+
+### 2.3.5 保留时间
+
+**Prometheus专为短期监控和报警需求而设计**。默认情况下时序数据保留15天。如果要
+保留更长时间，建议将数据发送到远程的第三方平台。
+
+# 3 Prometheus安装与配置
+
+## 3.1 配置
+
+Prometheus通过yaml文件来配置。默认配置大致如下：
+
+```yaml
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+  - static_configs:
+    - targets:
+      # - alertmanager: 9093
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090]
+```
+
+默认配置文件中定义了4个YAML块：global alerting rule_files scrape_configs
+
+### 3.2.1 global
+
+global控制Prometheus服务器行为的全局配置：
+
+#### scrape_interval
+
+指定应用程序或服务抓取数据的时间间隔。这个值是时间序列的颗粒度，即该序列中每个数据点所覆盖的时间段。
+
+从特定位置收集指标时，可能会覆盖这个全局抓取间隔。强烈不建议这么做。**建议保持一个全局抓取时间，这确保所有时间序列具有相同的颗粒度**，并可以组合在一起计算。但使用了不同的数据间隔来收集数据时，则可能产生不和逻辑的结果。
+
+>WARNING:仅设置抓取间隔为全局参数以保持颗粒度一致。
+
+#### evaluation_interval
+
+指定Prometheus评估规则的频率。目前主要有两种规则：记录规则(recording rule)和报警规则(alerting rule)
+
+- recording rule:允许预先计算使用频繁且开销大的表达式，并将结果保存为一个新的时间序列数据。
+
+- alerting rule:允许定义报警条件
+
+Prometheus根据evaluation_interval的设置，每隔15s(重新)评估这些规则。
+
+### 3.2.2 alerting
+
+用来设置Prometheus的警报。警报是由名为Alertmanager的独立工具进行管理的。Alertmanager是一个可以集群化的独立警报管理工具。
+
+在上面的默认配置中,alerting包含服务器的警报配置，其中alertmanagers块列出Prometheus使用的每个Alertmanager,static_configs块标识手动指定targets数组中配置的Alertmanager.
+
+>NOTE:Prometheus还指出Alertmanager的服务发现功能，如通过查询外部源(Consul)来返回可用的Alertmanager列表，而不是手动指定。
+
+### 3.2.3 rule_files
+
+指定包含recording rule和alerting rule的文件列表
+
+### 3.2.4 scrape_configs
+
+指定Prometheus抓取的所有目标。Prometheus将抓取指标的数据源称为端点。为了抓取端点的数据，Prometheus定义了一个目标，目标包含的信息是抓取数据所必需的，如用到的标签，建立连接所需的身份验证，或其他定义数据抓取的信息。若干目标构成的组成为作业，作业里的每个目标都有一个名为实例(instance)的标签，用来唯一标识这个目标。
+
+ 
