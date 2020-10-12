@@ -74,3 +74,21 @@ wget https://extensions.gnome.org/extension-data/dash-to-dock%40micxgx.gmail.com
 unzip dash-to-dock@micxgx.gmail.com.v64.shell-extension.zip -d ~/.local/share/gnome-shell/extensions/dash-to-dock@micxgx.gmail.com/
 sudo reboot
 ```
+
+在修改sources.list文件，添加源后，如果执行update过程中出现如下错误：
+
+The following signatures couldn't be verified because the public key is not available: NO_PUBKEY DFA175A75104960E
+
+可采用如下方式解决：
+
+```bash
+sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys DFA175A75104960E
+```
+
+or
+
+```bash
+apt-get install debian-keyring
+gpg --keyserver pgp.mit.edu --recv-keys DFA175A75104960E
+gpg --armor --export 1F41B907 | apt-key add -
+```
