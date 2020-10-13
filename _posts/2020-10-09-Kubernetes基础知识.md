@@ -262,8 +262,264 @@ spec:
 ```
 ### 2.1.5 容器的生命周期
 
+Kubernetes提供了容器生命周期回调，在容器生命周期的特定阶段执行调用，比如容器在停止前希望执行某项操作，就可以注册响应的回调函数。目前提供的声明周期回调函数如下：
 
+- PostStart: 此回调在创建容器之后立即执行。但不能保证回调会在容器ENTRYPOINT之前执行。没有参数传递给处理程序。
+- PreStop: 在容器因为API请求或管理事件(诸如存活探针失败、资源抢占、资源竞争等)而被终止前，此回调会被调用。如果容器已经处于终止或完成状态，则PreStop回调的调用将失败。此调用是阻塞的，也是同步调用，因此必须在删除容器的调用之前完成。
 
+实际使用时，只需要配置Pod的lifecycle.postStart或lifecycle.preStop参数，如下所示：
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+spec:
+  containers:
+  - name: container-0
+    image: nginx:alpine
+    resources:
+      limits:
+        cpu: 100m
+        memory: 200Mi
+      requests:
+        cpu: 100m
+        memory: 200Mi
+    lifecycle:
+      postStart: # 启动后处理
+        exec:
+          command:
+          - "/postStart.sh"
+      preStop: # 停止前处理
+        exec:
+          command:
+          - "/preStop.sh"
+   imagePullSecrets:
+   - name: default-secret
+  ```
+## 2.2 存活探针(Liveness Probe)
+### 2.2.1 存活探针
+kubernetes提供了自愈能力，具体就是能感知到容器崩溃，然后能重启这个容器。但有的应用，如Java程序内存泄漏了，程序无法正常工作，但jvm进程却是一直运行的，对于这种应用本省业务出了问题的情况，kubernetes提供了liveness Probe机制，通过检测容器影响是否正常来决定是否重启，这是一种健康检查机制。
+
+毫无疑问，每个Pod最好都定义Liveness Probe，否则kubernetes无法感知Pod是否正常运行。
+
+kubernetes支持如下三种探测机制：
+- HTTP GET: 向容器发送HTTP GET请求，如果Probe收到2xx或3xx，说明容器是健康的
+- TCP Socket: 尝试与容器指定端口建立TCP连接，如果连接成功建立，说明容器是健康的
+- Exec: Probe执行容器中的命令并检查命令退出的状态码，如果状态码为0则说明容器是健康的
+
+与存活探针对应的还有一个就绪探针Readiness Probe,在kubernetes网络-->就绪探针部分介绍。
+
+### 2.2.2 HTTP GET
+
+定义方法如下：
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: liveness-http
+spec:
+  containers:
+  - name: liveness
+    image: nginx:alpine
+    livenessProbe:
+      httpGet:
+        path: /
+        port: 80
+```
+
+### 2.2.3 TCP Socket
+
+定义方法如下：
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: liveness-tcp
+  labels:
+    test: liveness
+spec:
+  containers:
+  - name: liveness
+    image: nginx:alpine
+    livenessProbe:
+      tcpSocket:
+        port: 80
+```
+### 2.2.4 Exec
+定义方法如下：
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    test: liveness
+  name: liveness-exec
+spec:
+  containers:
+  - name: livess
+    image: nginx:alpine
+    args:
+    - /bin/sh
+    - -c
+    - touch /tmp/healthy; sleep 30; rm -rf /tmp/healthy; sleep 600
+    livenessProbe:
+      exec:
+        command:
+        - cat
+        - /tmp/healthy
+```
+上面的定义在容器中执行cat /tmp/healthy命令，如果成功执行并返回0，则说明容器是健康的。上面定义中，30秒后命令会删除/tmp/healthy，这导致liveness Probe判定Pod处于不健康状态，然后会重启容器。
+
+### 2.2.5 Liveness Probe高级配置
+
+上面liveness-http的describe命令有输出如下内容：
+```
+Liveness: http-get http://:8080/ delay=0s timeout=1s period=10s #success=1 #failure=3
+```
+这一行表示Liveness Probe的具体参数配置，含义如下：
+- delay:延迟，delay=0表示容器启动后立即开始探测，没有延迟时间
+- timeout：超时，timeout=1s表示容器必须在1s内进行响应，否则这次探测记作失败
+- period:周期，period=10s,表示每10s探测一次容器
+- success:成功，#success=1,表示连续1次成功后记作成功
+- failure：失败，#failure=3，表示连续3此失败后会重启容器
+
+以上存活探针表示：容器启动后立即进行探测，如果1s内容器没有给出回应则记作探测失败。每次间隔10s进行一次探测，在探测连续失败3次后重启容器。
+
+这些是创建是默认配置的，也可以手动配置，如：
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: liveness-http
+spec:
+  containers:
+  - image: k8s.gcr.io/liveness
+    livenessProbe:
+      httpGet:
+        path: /
+        port: 8080
+    initialDelaySeconds: 10 # 容器启动多久开始探测
+    timeoutSeconds: 2   # 表示容器必须在2s内做出相应反馈给probe，否则视为探测失败
+    periodSeconds: 30   # 探测周期，每30s探测一次
+    successThreshold: 1 # 连续探测1次成功，则判定为成功
+    failureThreshold: 3 # 连续探测3次失败，则判断为失败
+    ```
+initialDelaySeconds一般要设置为大于0，因为很多情况下容器已启动成功，但应用就绪也需要一定时间，需要等待就绪时间之后才能返回成功，否则就会导致probe经常失败。
+
+另外failureThreshold可以设置多次循环探测，这样在实际应用中健康检查的程序就不需要多次循环，这一点在开发应用是需要注意。
+
+### 2.2.6 配置有效的Liveness Probe
+
+- Liveness Probe应该检查什么
+
+好的Liveness Probe应该检查应用内部所有的关键部分是否健康，并使用一个专有的URL访问，如/health,当访问/health时，执行这个功能，然后返回对应结果。这里要注意不能做鉴权，否则Probe可能会一直失败导致陷入重启的死循环
+
+另外检查只能限制在应用内部，不能检查依赖外部的部分。如当前web server不能连接数据库时，这个就不能看成web server不健康了。
+
+- Liveness Probe必须轻量
+
+Liveness Probe不能占用过多资源，且不能占用过长时间，否则所有资源都在做健康检查就没意义了。如Java应用，最好用HTTP GET方式，如果用Exec方式，jvm启动就占用了非常多的资源
+
+## 2.3 Label:组织Pod的利器
+### 2.3.1 为什么需要Label
+当资源变得非常多的时候，如何分类管理就非常重要了。kubernetes提供了一种机制来为资源分类，那就是Label(标签)。Label非常简单，但却很请打，kubernetes中几乎所有的资源都可以用Label来组织。
+Label的具体形式是key-value的标记对，可以在创建资源的时候设置，也可以在后期添加和修改。
+以Pod为例，当Pod变得多起来后，就显得杂乱且难以管理，没有分类组织的Pod如下图所示：
+
+![](./images/pod_without_label.png)
+
+如果为Pod打上不同的标签，那情况就完全不同了，使用Label组织的Pod如下图所示：
+
+![](./images/pod_with_label.png)
+
+### 2.3.2 添加Label
+Label的形式为key-value形式，使用非常简单，如下，为Pod设置了app=nginx和env=prod两个Label
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+  labels:  # 为Pod设置两个Label
+    app: nginx
+    env: prod
+spec:
+  containers:
+  - image: nginx:alpine
+    name: container-0
+    resources:
+      limits:
+        cpu: 100m
+        memory: 200Mi
+      requests:
+        cpu: 100m
+        memory: 200Mi
+```
+
+Pod有了Label后，在查询Pod的时候带上--show-labels就可以看到Pod的Label
+```bash
+$ kubectl get pod --show-labels
+NAME              READY   STATUS    RESTARTS   AGE   LABELS
+nginx             1/1     Running   0          50s   app=nginx,env=prod
+```
+还可以使用-L只查询某些特定的Label
+```bash
+$ kubectl get pod -L app,env
+NAME              READY   STATUS    RESTARTS   AGE   APP     ENV
+nginx             1/1     Running   0          1m    nginx   prod
+```
+对已存在的Pod，可以直接使用kubectl label命令直接添加Label
+```bash
+$ kubectl label po nginx creation_method=manual
+pod/nginx labeled
+
+$ kubectl get pod --show-labels
+NAME              READY   STATUS    RESTARTS   AGE   LABELS
+nginx             1/1     Running   0          50s   app=nginx, creation_method=manual,env=prod
+```
+### 2.3.3 修改Label
+对于已存在的Label，如果需要修改的话，需要在命令中带上--overwrite选项：
+```bash
+$ kubectl label po nginx env=debug --overwrite
+pod/nginx labeled
+
+$ kubectl get pod --show-labels
+NAME              READY   STATUS    RESTARTS   AGE   LABELS
+nginx             1/1     Running   0          50s   app=nginx,creation_method=manual,env=debug
+```
+
+## 2.4 Namespace:资源分组
+### 2.4.1 为什么需要namespace
+Label虽好，但只用Label的话，则Label会非常多，有时候会重叠。且每次查询之类的动作都会带一堆的Label，非常不方便。Kubernetes提供了namespace来做资源组织和划分，使用namespace可以将包含很多组件的系统分成不同的组。namespace也可以用来做多租户划分，这样多个团队就可以共用一个集群，使用的资源使用namespace划分开。
+不同的namespace下可以有相同的名字，kubernetes中大部分资源可以用namespace划分，不过有些资源不行，它们属于全局资源，不属于namespace。
+使用下面的命令查询当前集群拥有的namespace：
+```bash
+# kubectl get ns
+```
+到目前位置，都是在名为default的namespace下操作，当使用kubectl get而不指定namespace时，默认为default namespace,下面的命令查询kube-system namespace下的Pod：
+```bash
+kubectl get po -n kube-system
+```
+可以看到kube-system有很多Pod，其中coredns用于服务发现，everest-csi用于华为对接华为云存储服务，icagent用于对接华为云监控系统。
+这些通用的、必须的应用放到kube-system这个namespace中，以便与其他Pod之间隔离。其他namespace不会看到kube-system这个namespace中的东西，不会造成影响。
+
+### 2.4.1 创建namespace
+使用如下yaml定义namespace:
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: custom-namespace
+  ```
+使用命令行方式创建namespace的方式如下：
+```bash
+kubectl create namespace custom-namespace
+```
+### 2.4.1 namespaced的隔离说明
 
 
 
