@@ -856,7 +856,7 @@ systemd收集器的数据展示了主机上的服务状态和其他各种systemd
 下面的查询为每个潜在的服务和状态（failed、inactive、active等）的组合生成指标，其中表示当前服务状态的指标的值为1。
 
 ```
-node_systemd_unit_state{{name="docker.service"}
+node_systemd_unit_state{{name="docker.service"}}
 ```
 
 可以通过添加state标签来进一步缩小搜索范围，仅返回active状态的数据。
