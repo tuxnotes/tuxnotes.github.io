@@ -507,7 +507,7 @@ kubectl get po -n kube-system
 可以看到kube-system有很多Pod，其中coredns用于服务发现，everest-csi用于华为对接华为云存储服务，icagent用于对接华为云监控系统。
 这些通用的、必须的应用放到kube-system这个namespace中，以便与其他Pod之间隔离。其他namespace不会看到kube-system这个namespace中的东西，不会造成影响。
 
-### 2.4.1 创建namespace
+### 2.4.2 创建namespace
 使用如下yaml定义namespace:
 ```yaml
 apiVersion: v1
@@ -519,8 +519,191 @@ metadata:
 ```bash
 kubectl create namespace custom-namespace
 ```
-### 2.4.1 namespaced的隔离说明
+### 2.4.3 namespaced的隔离说明
+namespace只能做到组织上划分，对运行的对象来说，不能做到真正的隔离。举例来说，如果两个namespace下的Pod知道对方的IP，而kubernetes依赖的底层网络没有提供namespace之间的网络隔离的话，那这两个Pod就可以相互访问。
 
+# 3 Pod的编排与调度
+
+## 3.1 Deployment
+### 3.1.1 什么是Deployment
+Pod是kubernetes创建和部署的最小单位，但是Pod是被设计为相对短暂的一次性实体，Pod可以被驱逐(当节点资源不足时)、随着集群的节点崩溃而消失。kubernetes提供了Controller来管理Pod，Controller可以创建和管理多个Pod，提供副本管理、滚动升级和自愈能力，其中最为常用的就是Deployment。
+**一个Deployment可以包含一个或多个Pod副本，每个Pod副本的角色相同**,所以系统会自动为Deployment的多个Pod副本分发请求。
+Deployment集成了上线部署、滚动升级、创建副本、恢复上线的功能，在某种程度上，Deployment实现无人值守的上线，大大降低了上线过程的复杂性和操作风险。
+
+### 3.1.2 创建Deployment
+下面的实例创建一个名为nginx的Deployment，使用nginx:lasest镜像创建两个Pod，每个Pod占用100m core CPU、200M内存。
+
+```yaml
+apiVersion: apps/v1 # 注意这里与Pod的区别，是apps/v1
+kind: Deployment    # 资源类型
+metadata:
+  name: nginx       # Deployment的名称
+spec:
+  relicas: 2        # Pod的数量，Deployment会确保一直有2个Pod运行
+  selector:         # Label Selector
+    matchLabels:
+      app: nginx
+  template:         # Pod的定义，用于创建Pod，也称为Pod template
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - image: nginx:latest
+        name: container-0
+        resources:
+          limits:
+            cpu: 100m
+            memory: 200Mi
+          requests:
+            cpu: 100m
+            memory: 200Mi
+      imagePullSecrets:
+      - name: default-secret
+```
+从定义中可以看到Deployment的名称为nginx，spec.replicas定义了Pod的数量，即这个Deployment控制2个Pod；spec.selector是Label Selector(标签选择器)，表示这个Deployment会选择Label为app=nginx的Pod；spec.template是Pod的定义，内容与Pod中的定义完全一致。将上面的定义保存到deployment.yaml文件中，使用kubectl创建这个Deployment。
+
+```bash
+kubectl craete -f deployment.yaml
+```
+查看Deployment的Pod
+```bash
+$ kubectl get deploy
+NAME           READY     UP-TO-DATE   AVAILABLE   AGE
+nginx          2/2       2            2           4m5s
+```
+可以看到**READY**值为2/2，前一个2表示当前有2个Pod运行，后一个2表示期望有2个Pod；**AVAILABLE**为2表示有2个Pod是可用的。
+### 3.1.3 Deployment如何控制Pod
+继续查询Pod
+```bash
+$ kubectl get pods
+NAME                     READY     STATUS    RESTARTS   AGE
+nginx-7f98958cdf-tdmqk   1/1       Running   0          13s
+nginx-7f98958cdf-txckx   1/1       Running   0          13s
+```
+如果删掉一个Pod，立马会有一个新的Pod被创建出来，如下所示，这就是前面所说的Deployment会确保有2个Pod在运行。如果删掉一个，Deployment会重新创建一个，如果某个Pod故障或其他有问题，Deployment会自动拉起这个Pod：
+```bash
+$ kubectl delete pod nginx-7f98958cdf-txckx
+
+$ kubectl get pods
+NAME                     READY     STATUS    RESTARTS   AGE
+nginx-7f98958cdf-tdmqk   1/1       Running   0          21s
+nginx-7f98958cdf-tesqr   1/1       Running   0          21s
+```
+如上所示，有两个名为nginx-7f98958cdf-tdmqk和nginx-7f98958cdf-tesqr的Pod，Pod的名称中用短线分割，第一部分为nginx是Deployment的名称，-7f98958cdf-tdmqk和-7f98958cdf-tesqr是kubernetes随机生成的后缀。
+你也许已经发现这两个后缀中的前面一部分是相同的，都是7f98958cdf，这是因为Deployment不是直接控制Pod的，Deployment通过一种名为ReplicaSet的控制器控制Pod，使用如下命令查询ReplicaSet，简写为rs。
+```bash
+$ kubectl get rs
+NAME               DESIRED   CURRENT   READY     AGE
+nginx-7f98958cdf   2         2         2         1m
+```
+ReplicaSet的名称为nginx-7f98958cdf,后-7f98958cdf也是随机生成的。
+Deployment控制Pod的方式如下图所示，Deployment控制ReplicaSet，ReplicaSet控制Pod。
+
+![](/assets/img/rs.png)
+
+如果使用kubectl describe命令查看Deployment的详情，可以看到有一行NewReplicaSet: nginx-7f98958cdf (2/2 replicas created)，而且Events里面事件确是把ReplicaSet的实例扩容到2个。在实际使用中您也许不会直接操作ReplicaSet，但了解Deployment通过控制ReplicaSet来控制Pod会有助于定位问题。
+
+```bash
+$ kubectl describe deploy nginx
+Name:                   nginx
+Namespace:              default
+CreationTimestamp:      Sun, 16 Dec 2018 19:21:58 +0800
+Labels:                 app=nginx
+
+...
+
+NewReplicaSet:   nginx-7f98958cdf (2/2 replicas created)
+Events:
+  Type    Reason             Age   From                   Message
+  ----    ------             ----  ----                   -------
+  Normal  ScalingReplicaSet  5m    deployment-controller  Scaled up replica set nginx-7f98958cdf to 2
+```
+
+### 3.1.4 升级
+实际应用中，升级是一个常见场景，Deployment能方便的支持应用升级。Deployment可以设置不同的升级策略，有如下两种：
+
+- RollingUpdate:滚动升级，即逐步创建新Pod在删除旧Pod，为默认策略
+- Recreate: 替换升级，即先把当前Pod删掉再重新创建Pod
+
+Deployment的升级可以是声明式的，即只需要修改Deployment的YAML定义即可。
+Deployment通过maxSurge和maxUnavailable两个参数控制升级过程中同时重新创建Pod的比例，很多时候这非常有用：
+
+```yaml
+spec:
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+```
+- maxSurge: 与Deployment中spec.replicas定义数量相比，可以有多个个Pod存在，默认是25%，比如spec.replicas为4，那升级过程中就不能超过5个Pod存在，即按1个的步伐升级，实际升级过程中会换算成数字，且换算会向上取整。这个值也是可以直接设置成数字。
+- maxUnavailabel: 与Deployment中spec.replicas相比，可以有多少个Pod失效，也就是删除的比例。默认是25%，比如spec.replicas为4，那升级过程中就至少有3个Pod存在，即删除Pod的步伐是1。同样这个值也可以设置成数字。
+
+在前面的例子中，由于spec.replicas是2，如果maxSurge和maxUnavailable都为默认值25%，那实际升级过程中，maxSurge允许最多3个Pod存在（向上取整，2 X 1.25=2.5，取整为3），而maxUnavailable设置为0，则不允许有Pod Unavailable，也就是说在升级过程中，一直会有2个Pod处于运行状态，每次新建一个Pod，等这个Pod创建成功后再删掉一个旧Pod，直至Pod全部为新Pod。
+
+### 3.1.5 回滚
+
+回滚也称为回退，即当发现升级出现问题时，让应用回到老的版本。Deployment可以非常方便的回滚到老版本。可以执行kubectl rollout undo命令进行回滚。
+
+```bash
+$ kubectl rollout undo deployment nginx
+deployment.apps/nginx rolled back
+```
+Deployment之所以能如此容易的做到回滚，是因为Deployment是通过ReplicaSet控制Pod的，升级后之前ReplicaSet都一直存在，Deployment回滚做的就是使用之前的ReplicaSet再次把Pod创建出来。Deployment中保存ReplicaSet的数量可以使用revisionHistoryLimit参数限制，默认值为10。
+
+## 3.2 StatefulSet
+### 3.2.1 为什么需要StatefulSet
+前面提到Deployment控制器下的Pod都有个共同点，就是每个Pod除了名称和IP不同，其余完全相同。需要的时候通过Pod模板创建Pod，不需要的时候Deployment可以删除任意Pod。
+但某些场景下，这并不满足需求，比如有些分布式的场景，要求每个Pod都有自己单独的状态时，比如分布式数据库，每个Pod要求有独立的存储，这时Deployment就不能满足需求了。
+详细分析一下有状态应用的需求，分布式有状态的特点主要是应用中每个部分的角色不同(即分工不同),比如数据库有准备，Pod之前有依赖，对应到kubernetes中就是对Pod有如下要求：
+
+- Pod能够被别的Pod找到，这就要求**Pod有固定的标识**
+- **每个Pod有单独存储**，Pod被删除恢复后，读取的数据必须还是以前那份，否则状态就会不一致。
+
+kubernetes提供了StatefulSet来解决这个问题，具体如下：
+1. StatefulSet**给每个Pod提供固定名称**，Pod名称增加从0-N的固定后缀，Pod重新调度后Pod的名称和hostname不变
+2. StatefulSet通过headless service给每个Pod提供固定的访问域名
+3. StatefulSet通过创建固定标识的PVC保证Pod重新调度后还是能访问到相同的持久化数据,如下图所示：
+
+![](/assets/img/stateful-pvc.png)
+
+下面通过创建StatefulSet来体验这些特性
+
+### 3.2.2 创建Headless Service
+创建StatefulSet需要一个headless service用于访问Pod，service的概念会在后面介绍，这里先介绍headless service的创建方法。使用如下文件描述headless service：
+
+```yaml
+apiVersion: v1
+kind: service # 对象类型为Service
+metadata:
+  name: nginx
+  labels:
+    app: nginx
+spec:
+  ports:
+    - name: nginx  # Pod间通信的端口名称
+      port: 80     # Pod间通信的端口号
+  selector:
+    app: nginx     # 选择标签为app: nginx的Pod
+  clusterIP: None  # 必须设置为None，表示headless service
+```
+执行如下命令进行创建headless service：
+```bash
+kubectl create -f headless.yaml
+```
+
+### 3.2.3 创建StatefulSet
+StatefulSet的YAML定义与其他对象基本相同，主要有两个差异点;
+- serviceName指定了StatefulSet使用哪个headless service，需要填写headless service的名称
+- volumeClaimTemplate用来申请持久化声明PVC，这里定义了一个名为data的模板，它为每个Pod创建一个PVC，storageClassName指定了持久化存储的类型；volumeMounts是为Pod挂载存储。当然如果不需要存储的话可以删除volumeClaimTemplate和volumeMounts字段
+
+
+### 3.2.4 StatefulSet的网络标识
+### 3.2.5 StatefulSet存储状态
+## 3.3 Job和CronJob
+## 3.4 亲和与反亲和调度
+## 3.1 Deployment
 
 
 
