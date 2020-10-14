@@ -31,7 +31,7 @@ Docker容器的主要概念：
 
 Docker容器典型使用流程如下图所示：
 
-![使用流程](./images/zh-cn_image_0258868444.png)
+![使用流程](/assets/img/zh-cn_image_0258868444.png)
 
 ## 1.2 Kubernetes
 
@@ -45,7 +45,7 @@ kubernetes提供了服务发现、伸缩、负载均衡、自愈设置选举等�
 
 Kubernetes集群包括master节点和node节点。应用部署在node节点上，且可以通过配置选择应用部署在某些特定节点上。kubernetes集群架构如下图所示：
 
-![集群架构](./images/cluster_arch.png)
+![集群架构](/assets/img/cluster_arch.png)
 
 #### master节点
 
@@ -74,7 +74,7 @@ kubernetes开放了容器运行时结构CRI，容器网络接口CNI和容器存�
 
 kubernetes基本对象及其之间的关系如下图所示：
 
-![对象及其关系](./images/objects.png)
+![对象及其关系](/assets/img/objects.png)
 
 - pod:kubernetes创建或部署的最小单位。一个Pod分装一个或多个container，存储资源volume、一个独立的网络IP以及管理控制容器运行方式的策略选项。
 - Deployment：对Pod的服务化封装，其可以包含一个或多个Pod，每个Pod的角色相同，所以系统会自动为Deployment的多个Pod分发请求
@@ -100,7 +100,7 @@ kubernetes中资源可使用yaml描述，也可以使用json。其内容有一�
 
 YAML描述文件如下图所示：
 
-![YAML描述](./images/object_yaml.png)
+![YAML描述](/assets/img/object_yaml.png)
 
 ### 1.2.6 在kubernetes上运行应用
 
@@ -167,7 +167,7 @@ Pod使用的两种方式：
 - Pod中运行多个需要耦合在一起工作、需要共享资源的容器。此场景下应用包含一个主容器和几个辅助容器(sidecar container).如主container是一个web服务，从一个笃定目录下对外提供文件服务，而辅助容器周期性的从外部下载文件存到这个固定目录。如下图所示：
 
 
-![pod](./images/pod.png)
+![pod](/assets/img/pod.png)
 
 实际中很少直接创建Pod，而是使用kubernetes中称为controller的抽象层来管理Pod实例，如Deployment和Job。controller可以创建和管理多个Pod，提供副本管理、滚动设计和自愈能力。通常controller会使用Pod template来创建相应的Pod。
 
@@ -430,11 +430,11 @@ Liveness Probe不能占用过多资源，且不能占用过长时间，否则所
 Label的具体形式是key-value的标记对，可以在创建资源的时候设置，也可以在后期添加和修改。
 以Pod为例，当Pod变得多起来后，就显得杂乱且难以管理，没有分类组织的Pod如下图所示：
 
-![](./images/pod_without_label.png)
+![](/assets/img/pod_without_label.png)
 
 如果为Pod打上不同的标签，那情况就完全不同了，使用Label组织的Pod如下图所示：
 
-![](./images/pod_with_label.png)
+![](/assets/img/pod_with_label.png)
 
 ### 2.3.2 添加Label
 Label的形式为key-value形式，使用非常简单，如下，为Pod设置了app=nginx和env=prod两个Label
