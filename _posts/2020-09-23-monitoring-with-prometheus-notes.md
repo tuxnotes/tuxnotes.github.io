@@ -863,7 +863,7 @@ node_systemd_unit_state{{name="docker.service"}}
 
 
 ```
-node_systemd_unit_state{{name="docker.service",state="active"}
+node_systemd_unit_state{{name="docker.service",state="active"}}
 ```
 
 或者搜索值为1的所有指标，这将返回当前服务的状态。
