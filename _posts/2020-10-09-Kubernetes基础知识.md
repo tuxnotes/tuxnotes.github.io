@@ -697,13 +697,279 @@ kubectl create -f headless.yaml
 StatefulSet的YAML定义与其他对象基本相同，主要有两个差异点;
 - serviceName指定了StatefulSet使用哪个headless service，需要填写headless service的名称
 - volumeClaimTemplate用来申请持久化声明PVC，这里定义了一个名为data的模板，它为每个Pod创建一个PVC，storageClassName指定了持久化存储的类型；volumeMounts是为Pod挂载存储。当然如果不需要存储的话可以删除volumeClaimTemplate和volumeMounts字段
+```yaml
+apiVersion: v1
+kind: StatefulSet
+metadata:
+  name: nginx
+spec:
+  serviceName: nginx    # headless service的名称
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: container-0
+        image: nginx-alpine
+        resources:
+          limits:
+            cpu: 100m
+            memory: 200Mi
+          requests:
+            cpu: 100m
+            memory: 200Mi
+        volumeMounts:                        # Pod挂载的存储
+        - name: data
+          mountPath: /usr/share/nginx/html   # 存储挂载到/usr/share/nginx/html
+      imagePullSecrets:
+      - name: default-secret
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteMany
+      resources:
+        requests；
+          storage: 1Gi
+      storageClassName: csi-nas      # 持久化存储的类型
+```
+使用`kubectl create -f statefulset.yaml`创建之后，查询StatefulSet和Pod，可以看到Pod的名称后缀从0开始到2，逐个递增。
+```bash
+# kubectl get statefulset
+NAME    READY   AGE
+nginx   3/3     107s
 
+# kubectl get pods
+NAME      READY   STATUS    RESTARTS   AGE
+nginx-0   1/1     Running   0          112s
+nginx-1   1/1     Running   0          69s
+nginx-2   1/1     Running   0          39s
+```
+此时如果手动删除nginx-1这个Pod。再次查询Pod，可以看到StatefulSet重新创建了一个名称相同的Pod，通过创建时间5s可以看出nginx-1是刚刚创建的。
+```bash
+# kubectl delete pod nginx-1
+pod "nginx-1" deleted
+
+# kubectl get pods
+NAME      READY   STATUS    RESTARTS   AGE
+nginx-0   1/1     Running   0          3m4s
+nginx-1   1/1     Running   0          5s
+nginx-2   1/1     Running   0          1m10s
+```
+进入容器查看容器的hostname，可以看到同样是nginx-0,nginx-1和nginx-2
+```bash
+# kubectl exec nginx-0 -- sh -c 'hostname'
+nginx-0
+# kubectl exec nginx-1 -- sh -c 'hostname'
+nginx-1
+# kubectl exec nginx-2 -- sh -c 'hostname'
+nginx-2
+```
+同时可以看一下StatefulSet创建的PVC，可以看到这些PVC，都以"PVC名称-StatefulSet名称-编号"的方式命名，且处于Bound状态。
+```bash
+# kubectl get pvc
+NAME           STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   AGE
+data-nginx-0   Bound    pvc-f58bc1a9-6a52-4664-a587-a9a1c904ba29   1Gi        RWX            csi-nas        2m24s
+data-nginx-1   Bound    pvc-066e3a3a-fd65-4e65-87cd-6c3fd0ae6485   1Gi        RWX            csi-nas        101s
+data-nginx-2   Bound    pvc-a18cf1ce-708b-4e94-af83-766007250b0c   1Gi        RWX            csi-nas        71s
+```
 
 ### 3.2.4 StatefulSet的网络标识
+StatefulSet创建后，可以看到Pod是有固定名称的，那headless service是如何起作用的呢，那就是使用DNS，为Pod提供固定的域名，这样Pod间就可以通过域名访问，即便Pod被重新创建而导致的Pod的IP地址变化，这个域名也不发生变化。
+headless service创建后，每个Pod的IP都会有下面格式的域名。
+**<pod-name>.<svc-name>.<namespace>.svc.cluster.local**
+例如上面三个Pod的域名如下：
+- nginx-0.nginx.default.svc.cluster.local
+- nginx-1.nginx.default.svc.cluster.local
+- nginx-2.nginx.default.svc.cluster.local
+
+由于在同一个namespace下，实际访问时可以省略后面的.<namespace>.svc.cluster.local
+下面命令会使用tutum/dnsutils镜像创建一个Pod，进入这个Pod的容器，使用nslookup查看Pod对应的域名，可以发现能解析出Pod的IP地址。这里可以看到DNS服务器的地址是10.247.3.10，这是创建CCE集群时迷人安装的CoreDNS插件，用于提供DNS服务。
+```bash
+$ kubectl run -i --tty --image tutum/dnsutils dnsutils --restart=Never --rm /bin/sh
+If you don't see a command prompt, try pressing enter.
+/ # nslookup nginx-0.nginx
+Server:         10.247.3.10
+Address:        10.247.3.10#53
+Name:   nginx-0.nginx.default.svc.cluster.local
+Address: 172.16.0.31
+
+/ # nslookup nginx-1.nginx
+Server:         10.247.3.10
+Address:        10.247.3.10#53
+Name:   nginx-1.nginx.default.svc.cluster.local
+Address: 172.16.0.18
+
+/ # nslookup nginx-2.nginx
+Server:         10.247.3.10
+Address:        10.247.3.10#53
+Name:   nginx-2.nginx.default.svc.cluster.local
+Address: 172.16.0.19
+```
+此时如果手动删除这两个Pod，查询被StatefulSet重新创建的PodIP，然后使用nslookup命令解析Pod的域名，可以发现nginx-0.nginx和nginx-1.nginx仍然能解析到对应的Pod，这就保证了StatefulSet网络标识不变。
+
 ### 3.2.5 StatefulSet存储状态
+前面提到StatefulSet可以通过PVC做持久化存储，保证Pod重新调度后还是能访问到相同的持久化数据，在删除Pod时，PVC不会被删除。StatefulSet的Pod重建过程如下图所示：
+
+![](/assets/img/pod-recreate.png)
+
+下面通过实际操作验证这一点是如何做到的，执行下面的命令，在nginx-1的目录/usr/share/nginx/html中写入一些内容，例如将index.html的内容修改为"hello world"
+```bash
+# kubectl exec nginx-1 -- sh -c 'echo hello world > /usr/share/nginx/html/index.html'
+```
+修改完后，如果在Pod中访问"http://localhost",就会返回"hello world"
+```bash
+# kubectl exec -it nginx-1 -- curl localhost
+hello world
+```
+此时如果手动删除nginx-1这个Pod，然后再次查询Pod，可以看到StatefulSet重新创建了一个名称相同的Pod，通过创建时间4s可以看出nginx-1是刚刚创建的。
+```bash
+# kubectl delete pod nginx-1
+pod "nginx-1" deleted
+
+# kubectl get pods
+NAME       READY   STATUS    RESTARTS   AGE
+nginx-0    1/1     Running   0          14m
+nginx-1    1/1     Running   0          4s
+nginx-2    1/1     Running   0          13m
+```
+再次访问该Pod的index.html页面，会发现仍然返回"hello world",这说明这个Pod仍然是访问相同的存储。
+```bash
+# kubectl exec -it nginx-1 -- curl localhost
+hello world
+```
+
 ## 3.3 Job和CronJob
-## 3.4 亲和与反亲和调度
-## 3.1 Deployment
+Job和CronJob是负责批量处理短暂的一次性任务(short lived one-off tasks),即执行一次的任务，它保证批处理任务的一个或多个Pod成功结束。
+- Job：是kubernetes用来控制批处理型任务的资源对象。批处理业务与长期伺服业务(Deployment、StatefulSet)的主要区别是批处理任务的运行有头有尾，而长期伺服业务在用户不停止的情况下永远运行。Job管理的Pod根据用户的设置包任务成功完成就自动退出(Pod自动删除)
+- CronJob:是基于时间的Job，就类似于Linux系统的crontab文件中的一行，在指定的时间周期运行指定的Job。
+
+任务负载的这种用完即停止的特性特别适合一次性任务，比如持续集成。
+
+### 3.3.1 创建Job
+以下是一个Job配置，其计算π到2000位并打印输出。Job结束需要运行50个Pod，这个示例中就是打印π50次，并行运行5个Pod，Pod如果失败，则最多重试5次
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pi-with-timeout
+spec:
+  completions: 50           # 运行的次数，即job结束需要成功运行的Pod的个数
+  parallelism: 5            # 并行运行Pod的数量，默认为1
+  backoffLimit: 5           # 表示失败Pod的重试最大次数，超过这个次数不会继续重试
+  activeDeadlineSeconds: 10 # 表示Pod超时时间，一旦达到这个时间，job及其所有的Pod都会停止
+  template:                 # Pod定义
+    spec:
+      containers:
+      - name: pi
+        image: perl
+        command:
+        - perl
+        - "-Mbignum=bpi"
+        - "-wle"
+        - print bpi(2000)
+      restartPolicy: Never
+```
+根据completions和parallelism的设置，可以将job划分为以下几种类型：
+
+| Job类型 | 说明 | 使用示例 |
+|:------- |；--- |:-------- |
+|一次性Job|创建一个Pod直到其成功结束|数据库迁移|
+|固定结束次数的Job|依次创建一个Pod运行直到completions个成功结束|处理工作队列的Pod|
+|固定结束次数的并行Job|依次创建多个Pod运行直到completions个成功结束|多个Pod同时处理工作队列|
+|并行Job|创建一个或多个Pod直到有一个成功结束 | 多个Pod同时处理工作队列|
+
+### 3.3.2 创建CronJob
+相比Job，CronJob就是加了定时的Job，CronJob执行时是在指定的时间创建出Job，然后由Job创建出Pod。
+
+```yaml
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: cronjob-example
+spec:
+  schedule: "0,15,30,45 * * * *"     # 定时相关配置
+  jobTemplate:                       # Job的定义
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: main
+            image: pi
+```
+CronJob的格式从前到后是：
+- Minute
+- Hour
+- Day
+- Month
+- week
+
+如 "0,15,30,45 * * * * " ，前面逗号隔开的是分钟，后面第一个* 表示每小时，第二个 * 表示每个月的哪天，第三个表示每月，第四个表示每周的哪天。
+
+*如果你想要每个月的第一天里面每半个小时执行一次，那就可以设置为" 0,30 * 1 * * " 如果你想每个星期天的3am执行一次任务，那就可以设置为 "0 3 * * 0"。
+
+## 3.4 DaemonSet
+DaemonSet是这样一种对象(守护进程)，它在集群的每个节点上运行一个Pod，且保证只有一个Pod，这非常适合一些**系统层面的应用**,例如日志收集、资源监控等，这类应用需要每个节点都运行，且不需要太多实例，一个典型的例子就是kubernetes的kube-proxy.
+DaemonSet跟节点相关，如果节点异常，也不会在其他节点重新创建。
+DaemonSet的yaml定义如下所示：
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nginx-daemonset
+  labels:
+    app: nginx-daemonset
+spec:
+  selector:
+    matchLabels:
+      app: nginx-daemonset
+  template:
+    metadata:
+      labels:
+        app: nginx-daemonset
+    spec:
+      nodeSelector: # 节点选择，当节点拥有daemon=need时候才在节点上创建Pod
+        daemon: need
+      containers:
+      - name: nginx-daemonset
+        image: nginx:alpine
+        resources:
+          limits:
+            cpu: 250m
+            memory: 512Mi
+          requests:
+            cpu: 250m
+            memory: 512Mi
+```
+这里可以看出没有Deployment或StatefulSet中的replicas参数，因为是每个节点固定一个。
+Pod模板中有个nodeSelector，指定了只在有“daemon=need”的节点上才创建Pod，如下图所示，DaemonSet只在指定标签的节点上创建Pod。如果需要在每一个节点上创建Pod可以删除该标签。DaemonSet在指定标签的节点上创建Pod，如下图所示：
+
+![](/assets/img/ds.png)
+
+如果修改掉192.168.0.94节点的标签，可以发现DaemonSet会删除这个节点上的Pod。
+
+```bash
+$ kubectl label node 192.168.0.94 daemon=no --overwrite
+node/192.168.0.94 labeled
+
+$ kubectl get ds
+NAME              DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR   AGE
+nginx-daemonset   1         1         1       1            1           daemon=need     4m5s
+
+$ kubectl get pod -owide
+NAME                    READY   STATUS    RESTARTS   AGE     IP           NODE
+nginx-daemonset-g9b7j   1/1     Running   0          2m23s   172.16.3.0   192.168.0.212
+```
+
+## 3.5 亲和与反亲和调度
 
 
 
