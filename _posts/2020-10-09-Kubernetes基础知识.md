@@ -880,7 +880,7 @@ spec:
 根据completions和parallelism的设置，可以将job划分为以下几种类型：
 
 | Job类型 | 说明 | 使用示例 |
-|:------- |；--- |:-------- |
+|:--- |:--- |:---|
 |一次性Job|创建一个Pod直到其成功结束|数据库迁移|
 |固定结束次数的Job|依次创建一个Pod运行直到completions个成功结束|处理工作队列的Pod|
 |固定结束次数的并行Job|依次创建多个Pod运行直到completions个成功结束|多个Pod同时处理工作队列|
@@ -970,7 +970,124 @@ nginx-daemonset-g9b7j   1/1     Running   0          2m23s   172.16.3.0   192.16
 ```
 
 ## 3.5 亲和与反亲和调度
+在DaemonSet中提到使用nodeSelector选择Pod要部署的节点，其实kubernetes还支持更精细、更灵活的调度机制，那就是亲和和反亲和调度。
+**kubernetes支持节点和Pod两个层级的亲和和反亲和**。通过配置亲和与反亲和规则，可以允许你指定硬性限制或偏好，例如将前台Pod和后台Pod部署在一起、某类应用部署到某些特定的节点、不同应用部署到不同的节点等等。
+### 3.5.1 Node Affinity(节点亲和)
+**亲和的基础也是标签**,先看一下CCE集群中节点上有什么标签：
+```bash
+$ kubectl describe node 192.168.0.212
+Name:               192.168.0.212
+Roles:              <none>
+Labels:             beta.kubernetes.io/arch=amd64
+                    beta.kubernetes.io/os=linux
+                    failure-domain.beta.kubernetes.io/is-baremetal=false
+                    failure-domain.beta.kubernetes.io/region=cn-east-3
+                    failure-domain.beta.kubernetes.io/zone=cn-east-3a
+                    kubernetes.io/arch=amd64
+                    kubernetes.io/availablezone=cn-east-3a
+                    kubernetes.io/eniquota=12
+                    kubernetes.io/hostname=192.168.0.212
+                    kubernetes.io/os=linux
+                    node.kubernetes.io/subnetid=fd43acad-33e7-48b2-a85a-24833f362e0e
+                    os.architecture=amd64
+                    os.name=EulerOS_2.0_SP5
+                    os.version=3.10.0-862.14.1.5.h328.eulerosv2r7.x86_64
+```
+这些标签都是在创建节点的时候CCE自动加上的，下面介绍一个在调度中会用到比较多的标签。
+- failure-domain.beta.kubernetes.io/region:表示节点所在的区域，如果上面这个节点标签值为cn-east-3，表示节点在上海一区域
+- failure-domain.beta.kubernetes.io/zone:表示节点所在的可用区(availability zone)
+- kubernetes.io/hostname: 节点的hostname
+此外还可以添加自定义标签，通常情况下，对于一个大型kubernetes集群，肯定会根据业务需要定义很多标签。
+在DaemonSet中介绍了nodeSelector，通过nodeSelector可以让Pod只部署在具有特定标签的节点上。如下所示，Pod智慧部署在拥有gpu=true的这个标签的节点上：
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+spec:
+  nodeSelector: # 节点选择，当节点拥有gpu-true时才在节点上创建Pod
+    gpu: true
+```
+通过节点亲和性规则配置，也可以做到同样的事情，如下所示：
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu
+  labels:
+    app: gpu
+spec:
+  selector:
+    matchLabels:
+      app: gpu
+  replicas: 3
+  template:
+    metadata:
+      labels:
+        app: gpu
+    sepc:
+      containers:
+      - image: nginx:alpine
+        name: gpu
+        resources:
+          limits:
+            cpu: 100m
+            memory: 200Mi
+          requests:
+            cpu: 100m
+            memory: 200Mi
+      imagePullSecrets:
+      - name: default-secret
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoreDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: gpu
+                operator: In
+                values:
+                - "true"
+```
+这种方式看起来复杂很多，但这种方式可以得到更强的表达能力，后面会进一步介绍。
+这里affinity表示亲和，nodeAffinity表示节点亲和,requiredDuringSchedulingIgnoredDuringExection非常长，不过可以将这个分作两端来看：
+- 前半段requiredDuringScheduling表示下面定义的规则必须强制满足(require)
+- 后半段IgnoredDuringExecution表示不会影响已经在节点上运行的Pod，目前kubernetes提供的规则都是以IgnoredDuringExection结尾的，因为当前的节点亲缘性规则只会影响正在被调度的Pod，最终，kubernetes也会支持RequiredDuringExecution，即去除节点上的某个标签，哪些需要节点包含该标签的Pod将会被剔除。
 
+另外早作福operator的值为In，表示标签值需要在values的列表中，其他的operator取值如下：
+- NotIn:标签的值不在某个列表中
+- Exists:某个标签存在
+- DoesNotExist:某个标签不存在
+- Gt:标签的值大于某个值(字符串比较)
+- Lt:标签的值小于某个值(字符串比较)
+需要说明的是并没有nodeAntiAffinity(节点反亲和),因为NotIn和DoesNotExist可以提供相同的功能。
+下面来验证这段规则是否生效，首先给192.168.0.212这个节点打上gpu=true的标签：
+```bash
+$ kubectl label node 192.168.0.212 gpu=true
+node/192.168.0.212 labeled
+
+$ kubectl get node -L gpu
+NAME            STATUS   ROLES    AGE   VERSION                            GPU
+192.168.0.212   Ready    <none>   13m   v1.15.6-r1-20.3.0.2.B001-15.30.2   true
+192.168.0.94    Ready    <none>   13m   v1.15.6-r1-20.3.0.2.B001-15.30.2
+192.168.0.97    Ready    <none>   13m   v1.15.6-r1-20.3.0.2.B001-15.30.2
+```
+创建这个Deployment，可以发现所有的Pod都部署在了192.168.0.212这个节点上了
+```bash
+$ kubectl create -f affinity.yaml
+deployment.apps/gpu created
+
+$ kubectl get pod -owide
+NAME                     READY   STATUS    RESTARTS   AGE   IP            NODE
+gpu-6df65c44cf-42xw4     1/1     Running   0          15s   172.16.0.37   192.168.0.212
+gpu-6df65c44cf-jzjvs     1/1     Running   0          15s   172.16.0.36   192.168.0.212
+gpu-6df65c44cf-zv5cl     1/1     Running   0          15s   172.16.0.38   192.168.0.212
+```
+
+### 3.5.2 节点优先选择规则
+上面提到的requiredDuringSchedulingIgnoredDuringExecution是一种**强制**选择的规则，节点亲和还有一种优先选择规则，即preferredDuringSchedulingIgoredDuringExecution，表示会根据规则优先选择哪些节点。
+为了演示这个效果，先为上面的集群添加一个节点，且这个节点个另外三个节点不在同一个可用区，
+### 3.5.1 Pod Affinity(Pod亲和)
+### 3.5.1 Pod AntiAffinity(Pod反亲和)
 
 
 
