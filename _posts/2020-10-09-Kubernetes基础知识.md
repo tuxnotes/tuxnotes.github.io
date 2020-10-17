@@ -1085,8 +1085,98 @@ gpu-6df65c44cf-zv5cl     1/1     Running   0          15s   172.16.0.38   192.16
 
 ### 3.5.2 节点优先选择规则
 上面提到的requiredDuringSchedulingIgnoredDuringExecution是一种**强制**选择的规则，节点亲和还有一种优先选择规则，即preferredDuringSchedulingIgoredDuringExecution，表示会根据规则优先选择哪些节点。
-为了演示这个效果，先为上面的集群添加一个节点，且这个节点个另外三个节点不在同一个可用区，
+为了演示这个效果，先为上面的集群添加一个节点，且这个节点个另外三个节点不在同一个可用区，创建完之后查询节点的可用区标签，如下所示，新添加的节点在cn-east-3c这个可用区。
+
+```bash
+$ kubectl get node -L failure-domain.beta.kubernetes.io/zone,gpu
+NAME            STATUS   ROLES    AGE     VERSION                            ZONE         GPU
+192.168.0.100   Ready    <none>   7h23m   v1.15.6-r1-20.3.0.2.B001-15.30.2   cn-east-3c   
+192.168.0.212   Ready    <none>   8h      v1.15.6-r1-20.3.0.2.B001-15.30.2   cn-east-3a   true
+192.168.0.94    Ready    <none>   8h      v1.15.6-r1-20.3.0.2.B001-15.30.2   cn-east-3a   
+192.168.0.97    Ready    <none>   8h      v1.15.6-r1-20.3.0.2.B001-15.30.2   cn-east-3a```
+下面定义个Deployment,要求Pod优先部署在可用区cn-east-3a的节点上，可以像下面这样定义，使用preferredDuringSchedulingIgnoredDuringExection规则，给cn-east-3a设置权重(weight)为80，而gpu=true权重为20，这样pod就优先部署在on-east-3a的节点上。
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu
+  labels:
+    app: gpu
+spec:
+  selector:
+    matchLabels:
+      app: gpu
+  replicas: 10
+  template:
+    metadata:
+      labels:
+        app: gpu
+    spec:
+      containers:
+      - image: nginx:alpine
+        name: gpu
+        resources:
+          limits:
+            cpu: 100m
+            memory: 200Mi
+          requests:
+            cpu: 100m
+            memory: 200Mi
+      imagePullSecrets:
+      - name: default-secret
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 80
+            preference:
+              matchExpressions:
+              - key: failure-domain.beta.kubernetes.io/zone
+                opetator: In
+                values:
+                - cn-east-3a
+          - weight: 20 
+            preference:
+              matchExpressions:
+              - key: gpu
+                opetator: In
+                values:
+                - "true"
+```
+来看一下实际部署后的情况，可以看到部署到192.168.0.212这个节点上的pod有5个，而192.168.0.100上只有2个。
+```bash
+$ kubectl create -f affinity2.yaml 
+deployment.apps/gpu created
+
+$ kubectl get po -o wide
+NAME                   READY   STATUS    RESTARTS   AGE     IP            NODE         
+gpu-585455d466-5bmcz   1/1     Running   0          2m29s   172.16.0.44   192.168.0.212
+gpu-585455d466-cg2l6   1/1     Running   0          2m29s   172.16.0.63   192.168.0.97 
+gpu-585455d466-f2bt2   1/1     Running   0          2m29s   172.16.0.79   192.168.0.100
+gpu-585455d466-hdb5n   1/1     Running   0          2m29s   172.16.0.42   192.168.0.212
+gpu-585455d466-hkgvz   1/1     Running   0          2m29s   172.16.0.43   192.168.0.212
+gpu-585455d466-mngvn   1/1     Running   0          2m29s   172.16.0.48   192.168.0.97 
+gpu-585455d466-s26qs   1/1     Running   0          2m29s   172.16.0.62   192.168.0.97 
+gpu-585455d466-sxtzm   1/1     Running   0          2m29s   172.16.0.45   192.168.0.212
+gpu-585455d466-t56cm   1/1     Running   0          2m29s   172.16.0.64   192.168.0.100
+gpu-585455d466-t5w5x   1/1     Running   0          2m29s   172.16.0.41   192.168.0.212
+```
+上面这个例子中，对节点排序优先级如下所示，有个两个标签的节点排序最高，只有cn-east-3a标签的节点排序第二(权重为80)，只有gpu=true的节点排序第三，没有标签的节点排序最低。优先级排序顺序如下图所示：
+
+![](/assets/img/schedule-order.png)
+
+这里也可以看到pod并没有调度到192.168.0.94这个节点上，这是因为这个节点上部署了很多其他pod，资源使用较多，所以并没有往这个节点上调度，这也侧面说明preferredDuringSchedulingIgnoredDuringExecution是优先规则，而不是强制规则。
+
 ### 3.5.1 Pod Affinity(Pod亲和)
+节点亲和规则只能影响pod和节点之间的亲和，kubernetes还支持pod和pod直接的亲和，例如将应用的前端和后端部署在一起，从而减少访问延迟。pod亲和同样有requiredDuringSchedulingIgnoredDuringExecution和preferredDuringSchedulingIgnoredDuringExecution两种规则。来看下面的例子，假设有个应用的后端已经创建，且带有app=backend的标签。
+
+```bash
+$ kubectl get po -o wide
+NAME                       READY   STATUS    RESTARTS   AGE     IP            NODE         
+backend-658f6cb858-dlrz8   1/1     Running   0          2m36s   172.16.0.67   192.168.0.100
+```
+将前端frontend的pod部署在backend一起时，可做如下pod亲和规则配置：
+```yaml
+
 ### 3.5.1 Pod AntiAffinity(Pod反亲和)
 
 
