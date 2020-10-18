@@ -1176,8 +1176,163 @@ backend-658f6cb858-dlrz8   1/1     Running   0          2m36s   172.16.0.67   19
 ```
 将前端frontend的pod部署在backend一起时，可做如下pod亲和规则配置：
 ```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  labels:
+    app: frontend
+spec:
+  selector:
+    matchLabels:
+      app: frontend
+  replicas: 3
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+      - image: nginx:alpine
+        name: frontend
+        resources:
+          limits:
+            cpu: 100m
+            momery: 200Mi
+          requests:
+            cpu: 100m
+            momery: 200Mi
+      imagePullSecrets:
+      - name: default-secret
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - topologyKey: kubernetes.io/hostname
+            labelSelector:
+              matchLabels:
+                app: backend
+```
+创建frontend后查看，可以看到frontend都创建到跟backend一样的节点上了。
+```bash
+$ kubectl create -f affinity3.yaml 
+deployment.apps/frontend created
 
+$ kubectl get po -o wide
+NAME                        READY   STATUS    RESTARTS   AGE     IP            NODE         
+backend-658f6cb858-dlrz8    1/1     Running   0          5m38s   172.16.0.67   192.168.0.100
+frontend-67ff9b7b97-dsqzn   1/1     Running   0          6s      172.16.0.70   192.168.0.100
+frontend-67ff9b7b97-hxm5t   1/1     Running   0          6s      172.16.0.71   192.168.0.100
+frontend-67ff9b7b97-z8pdb   1/1     Running   0          6s      172.16.0.72   192.168.0.100
+```
+这里有个topologyKey字段，意思是先圈定topologyKey指定的范围，然后再选择下面规则定义的内容。这里每个节点上都有kuberntes.io/hostname，所以看不出topologyKey起到的作用。
+如果backend有两个pod分别在不同的节点上。
+```bash
+$ kubectl get po -o wide
+NAME                       READY   STATUS    RESTARTS   AGE     IP            NODE         
+backend-658f6cb858-5bpd6   1/1     Running   0          23m     172.16.0.40   192.168.0.97
+backend-658f6cb858-dlrz8   1/1     Running   0          2m36s   172.16.0.67   192.168.0.100
+```
+给192.168.0.97和192.168.0.94打上一个perfer=true的标签。
+```bash
+$ kubectl label node 192.168.0.97 perfer=true
+node/192.168.0.97 labeled
+$ kubectl label node 192.168.0.94 perfer=true
+node/192.168.0.94 labeled
+
+$ kubectl get node -L perfer
+NAME            STATUS   ROLES    AGE   VERSION                            PERFER
+192.168.0.100   Ready    <none>   44m   v1.15.6-r1-20.3.0.2.B001-15.30.2   
+192.168.0.212   Ready    <none>   91m   v1.15.6-r1-20.3.0.2.B001-15.30.2   
+192.168.0.94    Ready    <none>   91m   v1.15.6-r1-20.3.0.2.B001-15.30.2   true
+192.168.0.97    Ready    <none>   91m   v1.15.6-r1-20.3.0.2.B001-15.30.2   true
+```
+将podAffinity的toppologyKey定义为prefer.
+```yaml
+affinity:
+  podAffinity:
+    requiredDuringSchedulingIgnoreDuringExection:
+    - topologyKey: perfer
+      labelSelector:
+        matchLabels:
+          app: backend
+```
+调度时先圈定用于perfer标签的节点，这里也就是192.168.0.97和192.168.0.94，然后在匹配app=backend标签的pod，从而frontend就会全部部署在192.168.0.97上。
+```yaml
+$ kubectl create -f affinity3.yaml 
+deployment.apps/frontend created
+
+$ kubectl get po -o wide
+NAME                        READY   STATUS    RESTARTS   AGE     IP            NODE         
+backend-658f6cb858-5bpd6    1/1     Running   0          26m     172.16.0.40   192.168.0.97
+backend-658f6cb858-dlrz8    1/1     Running   0          5m38s   172.16.0.67   192.168.0.100
+frontend-67ff9b7b97-dsqzn   1/1     Running   0          6s      172.16.0.70   192.168.0.97
+frontend-67ff9b7b97-hxm5t   1/1     Running   0          6s      172.16.0.71   192.168.0.97
+frontend-67ff9b7b97-z8pdb   1/1     Running   0          6s      172.16.0.72   192.168.0.97
+```
 ### 3.5.1 Pod AntiAffinity(Pod反亲和)
+通过pod亲和将pod部署在一起，有时候需求却恰恰相反，需要将pod分开部署，例如pod之前部署在一起回影响性能的情况。
+下面的例子定义了反亲和规则，这个规则表示pod不能调度到拥有app=frontend标签pod的节点上，也就是下面将frontend分别调度到不同的节点上(每个节点只有一个pod)
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  labels:
+    app: frontend
+spec:
+  selector:
+    matchLabels:
+      app: frontend
+  relicas: 5
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+      - image: nginx:alpine
+        name: frontend
+        resources:
+          limits:
+            cpu: 100m
+            memory: 200Mi
+          requests:
+            cpu: 100m
+            memory: 200Mi
+      imagePullSecrets:
+      - name: default-secret
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIngnoredDuringExecution:
+          - topologyKey: kubernetes.io/hostname
+            labelSelector:
+              matchLabels:
+                app: frontend
+```
+创建并查看，可以看到每个节点上只有一个frontend的pod，还有一个在pending，因为在部署第5个时4个节点上都有了app=frontend的pod，所以第5个一直是pending。
+```bash
+$ kubectl create -f affinity4.yaml 
+deployment.apps/frontend created
+
+$ kubectl get po -o wide
+NAME                        READY   STATUS    RESTARTS   AGE   IP            NODE         
+frontend-6f686d8d87-8dlsc   1/1     Running   0          18s   172.16.0.76   192.168.0.100
+frontend-6f686d8d87-d6l8p   0/1     Pending   0          18s   <none>        <none>       
+frontend-6f686d8d87-hgcq2   1/1     Running   0          18s   172.16.0.54   192.168.0.97 
+frontend-6f686d8d87-q7cfq   1/1     Running   0          18s   172.16.0.47   192.168.0.212
+frontend-6f686d8d87-xl8hx   1/1     Running   0          18s   172.16.0.23   192.168.0.94 
+```
+# 4 配置管理
+## 4.1 ConfigMap
+### 4.1.1 创建ConfigMap
+### 4.1.2 在环境变量中引用ConfigMap
+### 4.1.3 在Volume中引用ConfigMap
+## 4.2 Secret
+### 4.2.1 Base64编码
+### 4.2.2 创建Secret
+### 4.2.3 在环境变量中引用Secret
+### 4.2.4 在Volume中引用Secret
+
 
 
 
