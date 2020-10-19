@@ -1433,9 +1433,46 @@ spec:
     env:
   imagePullSecrets:
   - name: default-secret
+```
 ### 4.2.4 在Volume中引用Secret
+在Volume中引用Secret，就是通过文件的方式，直接将Secret的每条数据填入Volume，每条数据是一个文件，键就是文件名称，键值就是文件内容。
+如下示例中，创建一个名为vol-secret的Volume，这个Volume引用名为"mysecret"的Secret，再将Volume挂载到容器的"/tmp"路径下。Pod创建成功后，在容器的"/tmp"路径下，就有两个key1和key2
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+spec；
+  containers:
+  - image: nginx:alpine
+    name: container-0
+    resources:
+      limits:
+        cpu: 100m
+        memory: 200Mi
+      requests:
+        cpu: 100m
+        memory: 200Mi
+    volumeMounts:
+    - name: vol-secret   # 挂载名为vol-secret的Volume
+      mountPath: "/tmp"
+  imagePullSecrets:
+  volumes:
+  - name: vol-secret
+    secret:              # 引用secret
+      secretName: mysecret
+```
+进入Pod容器中，可以在/tmp目录下发现key1和key2两个文件，并看到文件中的值是base64解码后的值，分贝为"Hello world"和"3306".
 
-
+# 5 kubernetes网络
+## 5.1 容器网络
+## 5.2 Service
+## 5.3 Ingress
+## 5.4 就绪探针(Readliness Probe)
+## 5.5 NetworkPolicy
+# 6 持久化存储
+# 7 认证与授权
+# 8 弹性伸缩
 
 
 
