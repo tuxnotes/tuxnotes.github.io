@@ -1324,13 +1324,115 @@ frontend-6f686d8d87-xl8hx   1/1     Running   0          18s   172.16.0.23   192
 ```
 # 4 配置管理
 ## 4.1 ConfigMap
+ConfigMap是一种存储应用所需配置信息的资源类型，用于保存配置数据的键值对，可以用来保存单个属性，**也可以用来保存配置文件**。通过ConfigMap可以方便的做到配置解耦，使得不同环境具有不同的配置。相比环境变量。Pod中引用的ConfigMap可以做到实时更新，更新ConfigMap的数据后，Pod中引用的ConfigMap会同步刷新。
 ### 4.1.1 创建ConfigMap
+下面的示例创建了一个名为configmap-test的ConfigMap，ConfigMap的配置数据在data字段定义：
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: configmap-test
+data:
+  property_1: Hello
+  property_2: World
+```
 ### 4.1.2 在环境变量中引用ConfigMap
+ConfigMap最为常见的使用方式就是在环境变量和volume中引用。如下示例中，引用了configmap-test的`property_1`,将其作为环境变量`EXAMPLE_PROPERTY_1`的值，这样容器启动后里面的`EXAMPLE_PROPERTY_1`的值就是property_1的值，即"Hello".
+```yaml
+apiVersion: v1
+kind: Pod
+metadata；
+  name: nginx
+spec:
+  containers:
+  - image: nginx:alpine
+    name: container-0
+    resources:
+      limits:
+        cpu: 100m
+        memory: 200Mi
+      requests:
+        cpu: 100m
+        memory: 200Mi
+    env:
+    - name: EXAMPLE_PROPERTY_1
+      valueFrom:
+        configMapKeyRef:  # 引用configMap
+          name: configmap-test  # configmap的名称
+          key: property_1
+  imagePullSecrets:
+  - name: default-secret
+```
 ### 4.1.3 在Volume中引用ConfigMap
+在Volume引用ConfigMap，就是通过文件的方式直接将ConfigMap的每条数据填入Volume，每条数据是一个文件，键就是文件名，键值就是文件内容。
+如下示例中，创建一个名为vol-configmap的Volume，这个Volume引用名为"configmap-test"的ConfigMap，再将Volume挂载到容器的"/tmp"路径下。Pod创建成功后，在容器的"/tmp"路径下，就有两个文件`property_1`和`property_2`,它们的值分别为"Hello"和"World".
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+spec:
+  containers:
+  - image: nginx:alpine
+    name: container-0
+    resources:
+      limits:
+        cpu: 100m
+        memory: 200Mi
+      requests:
+        cpu: 100m
+        memory: 200Mi
+    volumeMounts:
+    - name: vol-configmap   # 挂载名为vol-configmap的Volume
+      mountPath: "/tmp"
+  imagePullSecrets:
+  volumes:
+  - name: vol-configmap
+    configMap:             # 引用ConfigMap
+      name: configmap-test
+```
 ## 4.2 Secret
+Secret是一种加密存储的资源对象，您可以将认证信息，证书，私钥等保存在Secret中，而不需要把这些敏感数据暴露到镜像或Pod定义中，从而更加安全和灵活。
+Secret与ConfigMap非常像，都是key-value键值对形式，使用方式也相同，不同的是Secret会加密存储，所以适用于存储敏感信息。
 ### 4.2.1 Base64编码
+Secret与ConfigMap相同，是以键值对形式保存数据，所不同的是在创建是，Secret的Value必须使用Base64编码。
+对字符创进行Base64编码，可直接使用"echo -n 要编码的内容|base64"即可，示例如下：
+```bash
+root@ubuntu:~# echo -n "3306" | base64
+MzMwNg==
+```
 ### 4.2.2 创建Secret
+如下示例中定义的Secret中包含两天Key-Value.
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysecret
+data:
+  key1: aGVsbG8gd29ybGQ=   # "hello world" Base64编码后的值
+  key2: MzMwNg==           # "3306" Base64编码后的值
+```
 ### 4.2.3 在环境变量中引用Secret
+Secret最常见的用法是作为环境变量注入到容器中，示例如下：
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+spec:
+  containers:
+  - image: nginx:alpine
+    name: container-0
+    resources:
+      limits:
+        cpu: 100m
+        memory: 200Mi
+      requests:
+        cpu: 100m
+        memory: 200Mi
+    env:
+  imagePullSecrets:
+  - name: default-secret
 ### 4.2.4 在Volume中引用Secret
 
 
