@@ -1466,7 +1466,43 @@ spec；
 
 # 5 kubernetes网络
 ## 5.1 容器网络
+kubernetes本身并不负责网络通信，kubernetes提供了容器网络接口CNI(container network interface)，具体的网络通信交给CNI插件来负责，开源的CNI插件非常多，像Flannel,Calico等，华为云CCE也专门为kubernetes定制了CNI插件，使得kubernetes可以使用华为云VPC网络。
+kubernetes虽然不负责网络，但要求集群中的Pod能相互通信，且Pod必须通过非NAT网络连接，即收到数据包的源IP就是发送数据包Pod的IP。同时Pod与节点之前的通信也是通过非NAT网络。但是Pod访问集群外部时源IP会被修改成节点的IP。
+Pod内部是通过虚拟Ethernet接口对(Veth pair)与Pod外部连接，Veth pair就像一个网线，一端留在Pod内部，一端在Pod之外。而同一个节点上的Pod通过网桥(Linux Bridge)通信，如下图所示：
+
+![](/assets/img/pod-on-one-node.png)
+
+不同节点间的网桥连接有很多种方式，这跟具体实现相关。但集群要求Pod的地址唯一，所以跨几点的网桥通常使用不同的地址段，以防止Pod的IP地址重复。不同节点上的Pod通信如下图所示：
+
+![](/assets/img/pod-on-diff-node.png)
+
+以上就是容器网络底层视图，后面将进一步介绍kubernetes是如何在此基础上向用户提供访问方案的。具体参见service和Ingress。
 ## 5.2 Service
+### 5.2.1 直接访问Pod的问题
+Pod创建完成后，如何访问Pod呢？直接访问Pod会有如下几个问题：
+- Pod随时会被Deployment这样的控制器删除重建，那访问Pod的结果就会变得不可预知
+- Pod的IP地址是Pod启动后才被分配，在启动前并不直到Pod的IP地址
+- 应用往往都是由多个运行相同镜像的一组Pod组成，逐个访问Pod也变得不现实
+举个例子，假设有这样一个应用程序，使用Deployment创建了前台和后台，前台会调用后台做一些计算处理，如下图所示。后台运行了3个Pod。这些Pod是相互独立且可被替换的，当Pod出现状况被重建时，新建的Pod的IP地址是新IP，前台的Pod无法直接感知。
+
+![](/assets/img/service-pod.png)
+
+### 5.2.2 使用service解决Pod访问的问题
+kubernetes中的service对象就死用来解决上述Pod访问问题的。service有一个固定IP地址(在创建CCE集群是有一个服务网段的设置，这个网段专门用于给Service分配IP地址)，Service将访问它的流量转发给Pod，具体转发给哪些Pod通过Label来选择，而且Service可以给这些Pod做负载均衡。
+那么对于上面的例子，为后台添加一个Service，通过Service来访问Pod，这样前台Pod就无需感知后台Pod的变化，如下图所示：
+
+![](/assets/img/svc-backend.png)
+
+### 5.2.3 创建后台Pod
+
+### 5.2.4 创建service
+### 5.2.5 使用ServiceName访问service
+### 5.2.6 Service是如何做到服务发现的
+### 5.2.7 Service的类型与使用场景
+### 5.2.8 NodePort类型的Service
+### 5.2.9 LoadBalancer类型的Service
+### 5.2.10 Headless Service
+
 ## 5.3 Ingress
 ## 5.4 就绪探针(Readliness Probe)
 ## 5.5 NetworkPolicy
