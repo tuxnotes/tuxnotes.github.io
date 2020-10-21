@@ -1494,21 +1494,488 @@ kubernetes中的service对象就死用来解决上述Pod访问问题的。servic
 ![](/assets/img/svc-backend.png)
 
 ### 5.2.3 创建后台Pod
-
+首先创建一个3副本的Deployment，即3个Pod，且Pod上带有标签"app:nginx",具体如下：
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - image: nginx:latest
+        name: container-0
+        resources:
+          limits:
+            cpu: 100m
+            memory: 200Mi
+          requests:
+            cpu: 100m
+            memory: 200Mi
+      imagePullSecrets:
+      - name: default-secret
+```
 ### 5.2.4 创建service
-### 5.2.5 使用ServiceName访问service
-### 5.2.6 Service是如何做到服务发现的
-### 5.2.7 Service的类型与使用场景
-### 5.2.8 NodePort类型的Service
-### 5.2.9 LoadBalancer类型的Service
-### 5.2.10 Headless Service
+下面示例创建一个名为"nginx"的Service，通过selector选择到标签"app:nginx"的Pod，目标Pod的端口为80，Service对外暴露的端口为8080.
+访问服务只需要通过"**服务名称:对外暴露的端口**"接口，对应本例即"nginx:8080"。这样，在其他Pod中，只需要通过"nginx:8080"就可以访问到"nginx"关联的Pod。
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+spec:
+  selector:    # Label Selector,选择包含app=nginx标签的Pod
+    app: nginx
+  ports:
+    - name: service0
+      targetPort: 80 # Pod的端口
+      port: 8080     # Service对外暴露的端口
+      protocol: TCP  # 转发协议类型，支持TCP和UDP
+  type: ClusterIP    # Service的类型
+```
+将上面service的定义保存到nginx-svc.yaml文件中，使用kubectl创建这个Service。
+```bash
+$ kubectl create -f nginx-svc.yaml
+service/nginx created
 
+$ kubectl get svc
+NAME         TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)    AGE
+kubernetes   ClusterIP   10.247.0.1       <none>        443/TCP    7h19m
+nginx        ClusterIP   10.247.124.252   <none>        8080/TCP   5h48m
+```
+可以看到Service有个ClusterIP，这个IP是固定不变的，除非将service删除，所以你可以使用ClusterIP在集群内部访问Service。下面创建一个Pod并进入容器，使用ClusterIP访问Pod，可以看到能直接返回内容。
+```bash
+$ kubectl run -i --tty --image nginx:alpine test --rm /bin/sh
+If you don't see a command prompt, try pressing enter.
+/ # curl 10.247.124.252:8080
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+...
+```
+### 5.2.5 使用ServiceName访问service
+通过DNS进行域名解析后，可以使用"**ServiceName:Port**"访问Service，这也是kubernetes最常见的一种使用方式，在创建CCE集群的时候，会默认要求安装CoreDNS插件，在kube-system命名空间下可以查看到CoreDNS的Pod。
+```bash
+$ kubectl get po --namespace=kube-system
+NAME                                      READY   STATUS    RESTARTS   AGE
+coredns-7689f8bdf-295rk                   1/1     Running   0          9m11s
+coredns-7689f8bdf-h7n68                   1/1     Running   0          11m
+```
+CoreDNS安装成功后，会称为DNS服务器，当创建Service后，CoreDNS会将Service的名称与IP记录起来，这样Pod就可以通过想CoreDNS查询Service的名称获得Service的IP地址。
+访问是通过nginx.<namespace>.svc.cluster.local访问，其中nginx为Service的名称，<namespace>为命名空间名称，svc.cluster.local为域名后缀，在实际使用中，在同一个命名空间下可以省略<namespace>.svc.cluster.local,直接使用ServiceName即可。
+例如上面创建的名为nginx的service，可以直接通过"**nginx:8080**"就可以访问到Service，进而访问后台Pod。
+使用ServiceName的方式有个主要的优点就是可以在开发应用程序时可以将ServiceName写在程序中，这样无需感知具体Service的IP地址。
+下面创建一个Pod并进入容器，查询nginx域名的地址，可以发现是解析出nginx这个Service的IP地址10.247.124.252；同时访问Pod的域名，可以看到能直接返回内容。
+```bash
+$ kubectl run -i --tty --image tutum/dnsutils dnsutils --restart=Never --rm /bin/sh
+If you don't see a command prompt, try pressing enter.
+/ # nslookup nginx
+Server:		10.247.3.10
+Address:	10.247.3.10#53
+
+Name:	nginx.default.svc.cluster.local
+Address: 10.247.124.252
+
+/ # curl nginx:8080
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+...
+```
+### 5.2.6 Service是如何做到服务发现的
+前面提到，有了Service后，无论Pod如何变化，Service都能发现到Pod。如果是用kubectl describe 命令查看Service的信息，将看到如下信息：
+```bash
+$ kubectl describe svc nginx
+Name:              nginx
+......
+Endpoints:         172.16.2.132:80,172.16.3.6:80,172.16.3.7:80
+......
+```
+可以看到一个Endpoints,Endpoints同样也是kubernetes的一种资源对象，可以查询得到。kubernetes正是通过Endpoints监控到Pod的IP，从而让Service能发现Pod。
+```bash
+$ kubectl get endpoints
+NAME         ENDPOINTS                                     AGE
+kubernetes   192.168.0.127:5444                            7h19m
+nginx        172.16.2.132:80,172.16.3.6:80,172.16.3.7:80   5h48m
+```
+这里的172.16.2.132:80是Pod的IP:Port，通过如下命令可以查看到Pod的IP，与上面的IP一致。
+```bash
+$ kubectl get po -o wide
+NAME                     READY   STATUS    RESTARTS   AGE     IP             NODE
+nginx-869759589d-dnknn   1/1     Running   0          5h40m   172.16.3.7     192.168.0.212
+nginx-869759589d-fcxhh   1/1     Running   0          5h40m   172.16.3.6     192.168.0.212
+nginx-869759589d-r69kh   1/1     Running   0          5h40m   172.16.2.132   192.168.0.94
+```
+
+![](/assets/img/svc-endpoints.png)
+
+如果删除一个Pod，Deployment会将Pod重建，新的Pod IP会发生变化。
+```bash
+$ kubectl delete po nginx-869759589d-dnknn
+pod "nginx-869759589d-dnknn" deleted
+
+$ kubectl get po -o wide
+NAME                     READY   STATUS    RESTARTS   AGE     IP             NODE
+nginx-869759589d-fcxhh   1/1     Running   0          5h41m   172.16.3.6     192.168.0.212
+nginx-869759589d-r69kh   1/1     Running   0          5h41m   172.16.2.132   192.168.0.94
+nginx-869759589d-w98wg   1/1     Running   0          7s      172.16.3.10    192.168.0.212
+```
+再次查看Endpoints，会发现Endpoints的内容随着Pod发生了变化。
+```bash
+$ kubectl get endpoints
+NAME         ENDPOINTS                                      AGE
+kubernetes   192.168.0.127:5444                             7h20m
+nginx        172.16.2.132:80,172.16.3.10:80,172.16.3.6:80   5h49m
+```
+下面进一步了解这又是如何实现的。
+在kubernetes集群架构中提到过Node节点上的kube-proxy，实际上Service相关的事情都有节点上的kube-proxy处理。在Service创建是kubernetes会分配IP给Service，同时通过API server通知所有的kube-proxy有新Service创建了，kube-proxy收到通知后通过iptables记录Service和IP/端口对的关系，从而让Service在节点上可以被查询到。
+下面是一个实际访问Service的图示，Pod X访问Service(10.247.124.252:8080)，在往外发数据包时，再节点上根据iptables规则，目的IP:Port被随机替换为Pod1的IP:Port，从而通过Service访问到实际的Pod。
+除了记录Service和IP/渡口对的关系，kube-proxy还会监控Service和Endpoints的变化，从而保证Pod重建后仍然能通过Service访问到Pod。Pod X访问Service的过程如下图所示：
+
+![](/assets/img/pod-svc-pod.png)
+
+### 5.2.7 Service的类型与使用场景
+Service的类型除了ClusterIP还有NodePort、LoadBalancer和None，这几种类型的Service有着不同的用途。
+- ClusterIP:用于在集群内部相互访问的场景，通过ClusterIP访问Service
+- NodePort:用于从集群外部访问的场景，通过节点上的端口访问Service
+- LoadBalancer:用于从集群外部访问的场景，其实是NodePort的扩展，通过一个特定的LoadBalancer访问Service，这个LoadBalancer将请求转发到节点的NodePort,而外部只需要访问LoadBalancer
+- None:用于Pod键的相互发现，这种类型的Service又叫Headless Service
+
+### 5.2.8 NodePort类型的Service
+NodePort类型的Service可以让kubernetes集群的每个Node节点上保留一个相同的端口，外部访问连接首先访问Node节点的IP:Port，然后将这些连接转发给服务对应的Pod，如下图所示：
+
+![](/assets/img/np-svc.png)
+
+下面是一个创建NodePort类型的Service。创建完成后，可以通过Node节点的IP:Port访问到后台的Pod。
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: nodeport-service
+spec:
+  type: nodePort
+  ports:
+  - port: 80
+    targetPort: 8080
+    nodePort: 30120
+  selector:
+    app: nginx
+```
+创建并查看，可以看到PORT这一列为8080:30120/TCP，说明Service的8080端口是映射到节点的30120端口。
+```bash
+$ kubectl create -f nodeport.yaml
+service/nodeport-service created
+
+$ kubectl get svc -owide
+NAME               TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)          AGE    SELECTOR
+kubernetes         ClusterIP   10.247.0.1       <none>        443/TCP          107m   <none>
+nginx              ClusterIP   10.247.124.252   <none>        8080/TCP         16m    app=nginx
+nodeport-service   NodePort    10.247.210.174   <none>        8080:30120/TCP   17s    app=nginx
+```
+此时，通过节点IP:端口访问Service可以访问到Pod，如下所示。
+```bash
+$ kubectl run -i --tty --image nginx:alpine test --rm /bin/sh
+If you don't see a command prompt, try pressing enter.
+/ # curl 192.168.0.212:30120
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+......
+```
+### 5.2.9 LoadBalancer类型的Service
+LoadBalancer类型的Service其实是NodePort类型Service的扩展，通过一个特定的LoadBalancer访问Service，这个LoadBalancer将请求转发到节点的NodePort。
+LoadBalancer本身不是kubernetes的组件，通常是有具体厂商(云服务提供商)提供，不同厂商的kubernetes集群与LoadBalancer的对接实现各不相同，例如华为云CCE对接了ELB。这就导致了创建LoadBalancer类型的Service有不同的实现。示意图如下所示：
+
+![](/assets/img/lb-svc.png)
+
+下面是一个创建LoadBalancer类型的Service。创建完成后，可以通过**ELB的IP:Port**访问到后台Pod。
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    kubernetes.io/elb.id: 3c7caa5a-a641-4bff-801a-feace27424b6
+  name: nginx
+  labels:
+    app: nginx
+spec:
+  loadBalancerIP: 10.78.42.242  # ELB示例的IP地址
+  ports:
+  - port: 80
+    name: service0
+    protocol: TCP
+    targetPort: 80
+    nodePort: 30120
+  type: LoadBalancer
+  selector:
+    app: nginx
+```
+上面metadata.annotations里的参数配置是CCE的LoadBalancer类型Service需要配置的参数，表示这个Service绑定哪个ELB实例。CCE还支持创建LoadBalancer类型Service时新建ELB实例
+### 5.2.10 Headless Service
+前面将的Service解决了Pod的内外部访问问题，但还有下面这些问题没解决。
+- 同时访问所有Pod
+- 一个Service内部Pod相互访问
+
+Headless Service正是解决这个问题的，headless Service不会创建ClusterIP，并且查询会返回所有Pod的DNS记录，这样就可以查询到所有Pod的IP地址。StatefulSet正是使用headless service解决Pod间相互访问的问题。
+```yaml
+apiVersion: v1
+kind: Service  # 对象类型为Service
+metadata:
+  name: nginx-headless
+  labels:
+    app: nginx
+spec:
+  selector:
+    app: nginx    # 选择app:nginx的Pod
+  ports:
+  - name: nginx   # Pod间通信的端口名称
+    port: 80      # Pod间通信的端口号
+  ClusterIP: None  # 必须设置为None，表示headless service
+```
+创建headless service后，可以查询service
+```bash
+# kubectl create -f headless.yaml
+service/nginx-headless created
+# kubectl get svc
+NAME             TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)   AGE
+nginx-headless   ClusterIP   None         <none>        80/TCP    5s
+```
+创建一个Pod来查询DNS，可以看到能返回所有Pod的记录，这就解决了访问所有Pod的问题了。
+```bash
+$ kubectl run -i --tty --image tutum/dnsutils dnsutils --restart=Never --rm /bin/sh
+If you don't see a command prompt, try pressing enter.
+/ # nslookup nginx-0.nginx
+Server:         10.247.3.10
+Address:        10.247.3.10#53
+Name:   nginx-0.nginx.default.svc.cluster.local
+Address: 172.16.0.31
+
+/ # nslookup nginx-1.nginx
+Server:         10.247.3.10
+Address:        10.247.3.10#53
+Name:   nginx-1.nginx.default.svc.cluster.local
+Address: 172.16.0.18
+
+/ # nslookup nginx-2.nginx
+Server:         10.247.3.10
+Address:        10.247.3.10#53
+Name:   nginx-2.nginx.default.svc.cluster.local
+Address: 172.16.0.19
+```
 ## 5.3 Ingress
+### 5.3.1 为什么需要Ingress
+Service是基于四层TCP和UDP协议转发的，而Ingress可以基于七层的HTTP和HTTPS协议转发，可以通过域名和路径做到更细粒度的划分，如下图所示：
+
+![](/assets/img/ing.png)
+
+### 5.3.2 Ingress工作机制
+要想使用Ingress功能，必须在kubernetes集群上安装Ingress controller。Ingress controller有多种实现，最常见的就是kubernetes官方维护的NGINX Ingress Controller；不同厂商通常有自己的实现，如华为云CCE使用华为云弹性负载均衡ELB实现Ingress的七层负载均衡。
+外部请求首先到达Ingress Controller，Ingress Controller根据Ingress的路由规则，查找到对应的Service，进而通过Endpoint查询到Pod的IP地址，然后将请求转发给Pod。Ingress工作机制如下图所示：
+
+![](/assets/img/ing-to-pod.png)
+
+### 5.3.3 创建Ingress
+下面的示例中，使用http协议，关联后端Service为"nginx:8080"，使用ELB作为Ingress controller(metadata annotations字段指定使用那个ELB实例)，当访问http://192.168.10.155:8080/test时，流量转发nginx:8080对应的Service，从而将流量转发到对应Pod。
+```yaml
+apiVersion: networking.k8s.io/v1beta1
+kind: Ingress
+metadata:
+  name: test-ingress
+  annotations:
+    kubernetes.io/ingress.class: cce
+    kubernetes.io/elb.port: '8080'
+    kubernetes.io/elb.ip: 192.168.10.155
+    kubernetes.io/elb.id: aa7cf5ec-7218-4c43-98d4-c36c0744667a
+spec:
+  rules:
+  - host: ''
+    http:
+      paths:
+      - backend:
+          serviceName: nginx
+          servicePort: 8080
+        path: "/test"
+        property:
+          ingress.beta.kubernetes.io/url-match-mode: STARTS_WITH
+```
+**Ingress中还可以设置外部域名**,这样就可以通过域名来访问到ELB，进而访问到后端服务。
+>说明：域名访问依赖于域名解析，需要将域名解析指向ELB实例的IP地址
+
+```bash
+spec:
+  rules:
+  - host: www.example.com    # 域名
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: nginx
+          servicePort: 80
+```
+### 5.3.4 路由到多个服务
+ngress可以同时路由到多个服务，配置如下所示：
+- 当访问http://foo.bar.com/foo时，访问的是s1:80后端
+- 当访问http://foo.bar.com/bar时，访问的是s2:80后端
+```yaml
+spec:
+  rules:
+  - host: foo.bar.com  # host地址
+    http:
+      paths:
+      - path: "/foo"
+        backend:
+          serviceName: s1
+          servicePort: 80
+      - path: "/bar"
+        backend:
+          serviceName: s2
+          servicePort: 80
+```
 ## 5.4 就绪探针(Readliness Probe)
+一个新Pod创建后，service就能立即选择到它，并会把请求转发给Pod，那问题来了，通常一个Pod启动是需要时间的，如果Pod还没准备好(可能需要时间来加载配置或数据，或可能需要执行一个预热程序之类)，这是把请求转给Pod的话，Pod也无法处理，造成请求失败。
+kubernetes解决这个问题的方法就是给Pod加一个业务就绪探针Readiness Probe，当检查到Pod就绪后才允许service将请求转发给Pod。
+Readiness Probe同样四周期性的检测Pod，然后根据响应来判断Pod是否就绪，与存活探针相同，就绪探针也支持如下三种类型：
+- Exec：Probe执行容器中的命令并检查命令退出的状态码，如果状态码为0则说明已经就绪
+- HTTP GET：往容器的IP:Port发送HTTP GET请求，如果Probe收到2xx或3xx，说明已经就绪
+- TCP Socket：尝试与容器建立TCP连接，如果能建立连接说明已经就绪
+### 5.4.1 Readiness Probe的工作原理
+通过Endpoints就可以实现Readiness Probe的效果，当Pod还未就绪时，将Pod的IP:Port从Endpoints中删除，Pod就绪后再加入到Endpoints中，Readiness Probe的实现原理如下图所示：
+
+![](/assets/img/readiness.png)
+### 5.4.2 Exec
+Exec方式与HTTP GET方式一致，如下所示，这个探针执行ls /ready命令，如果这个文件存在，则返回0，说明Pod就绪了，否则返回其他状态码。
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - image: nginx:alpine
+        name: container-0
+        resources:
+          limits:
+            cpu: 100m
+            memory: 200Mi
+          requests:
+            cpu: 100m
+            memory: 200Mi
+        readinessProbe:      # Readiness Probe
+          exec:              # 定义 ls /ready 命令
+            command:
+            - ls
+            - /ready
+      imagePullSecrets:
+      - name: default-secret
+```
+将上面Deployment的定义保存到deploy-read.yaml文件中，删除之前创建的Deployment，用deploy-read.yaml创建这个Deployment。
+```bash
+# kubectl delete deploy nginx
+deployment.apps "nginx" deleted
+
+# kubectl create -f deploy-read.yaml
+deployment.apps/nginx created
+```
+这里由于nginx镜像不包含/ready这个文件，所以在创建完成后容器不在Ready状态，如下所示，注意READY这一列的值为0/1，表示容器没有Ready。
+```bash
+# kubectl get po
+NAME                     READY     STATUS    RESTARTS   AGE
+nginx-7955fd7786-686hp   0/1       Running   0          7s
+nginx-7955fd7786-9tgwq   0/1       Running   0          7s
+nginx-7955fd7786-bqsbj   0/1       Running   0          7s
+```
+创建Service。
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+spec:
+  selector:
+    app: nginx
+  ports:
+  - name: service0
+    targetPort: 80
+    port: 8080
+    protocol: TCP
+  type: ClusterIP
+```
+查看Service，发现Endpoints一行的值为空，表示没有Endpoints。
+```bash
+$ kubectl describe svc nginx
+Name:              nginx
+......
+Endpoints:
+......
+```
+如果此时给容器中创建一个/ready的文件，让Readiness Probe成功，则容器会处于Ready状态。再查看Pod和Endpoints，发现创建了/ready文件的容器已经Ready，Endpoints也已经添加。
+```bash
+# kubectl exec nginx-7955fd7786-686hp -- touch /ready
+
+# kubectl get po -o wide
+NAME                     READY     STATUS    RESTARTS   AGE       IP
+nginx-7955fd7786-686hp   1/1       Running   0          10m       192.168.93.169
+nginx-7955fd7786-9tgwq   0/1       Running   0          10m       192.168.166.130
+nginx-7955fd7786-bqsbj   0/1       Running   0          10m       192.168.252.160
+
+# kubectl get endpoints
+NAME       ENDPOINTS           AGE
+nginx      192.168.93.169:80   14d
+```
+### 5.4.3 HTTP GET
+### 5.4.4 TCP Socket
+### 5.4.5 Readiness Probe高级配置
+与Liveness Probe相同，Readiness Probe也有同样的高级配置选项，上面nginx Pod的describe命令回显有中有如下行。
+```bash
+Readiness: exec [ls /var/ready] delay=0s timeout=1s period=10s #success=1 #failure=3
+```
+这一行表示Readiness Probe的具体参数配置，其含义如下：
+
+- delay=0s 表示容器启动后立即开始探测，没有延迟时间
+- timeout=1s 表示容器必须在1s内做出相应反馈给probe，否则视为探测失败
+- period=10s 表示每10s探测一次
+- #success=1 表示探测连续1次成功表示成功
+- #failure=3 表示探测连续3次失败后会重启容器
+
+这些是创建时默认设置的，您也可以手动配置，如下所示。
+```yaml
+        readinessProbe:      # Readiness Probe
+          exec:              # 定义 ls /readiness/ready 命令
+            command:
+            - ls
+            - /readiness/ready
+          initialDelaySeconds: 10    # 容器启动后多久开始探测
+          timeoutSeconds: 2          # 表示容器必须在2s内做出相应反馈给probe，否则视为探测失败
+          periodSeconds: 30          # 探测周期，每30s探测一次
+          successThreshold: 1        # 连续探测1次成功表示成功
+          failureThreshold: 3        # 连续探测3次失败表示失败
+```
 ## 5.5 NetworkPolicy
 # 6 持久化存储
 # 7 认证与授权
 # 8 弹性伸缩
+
 
 
 
