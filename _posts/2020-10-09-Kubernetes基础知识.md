@@ -1972,7 +1972,147 @@ Readiness: exec [ls /var/ready] delay=0s timeout=1s period=10s #success=1 #failu
           failureThreshold: 3        # 连续探测3次失败表示失败
 ```
 ## 5.5 NetworkPolicy
+NetworkPolicy是kubernetes设计用来限制Pod访问的对象，通过设置NetworkPolicy策略，可以允许Pod被哪些地址访问(入规则)、或Pod访问哪些地址(出规则)。这相当于从应用的层面构建了一道防火墙，进一步保证了网络安全。
+NetworkPolicy支持的能力取决于集群的网络插件的能力，如CCE的集群只支持设置Pod的入规则。
+默认情况下，如果命名空间中不存在任何策略，则所有进出该命名空间中的Pod流量都被允许。NetworkPolicy规则可以选择如下3种：
+- namespaceSelector:根据命名空间的标签选择，具有该标签的命名空间都可以访问
+- podSelector:根据Pod的标签选择，具有该标签的Pod都可以访问
+- ipBlock:根据网络选择，网段内的IP地址都可以访问(CCE当前不支持此种方式)
+
+### 5.5.1 使用podSelector设置访问范围
+使用podSelector设置访问范围的yaml定义如下：
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: test-network-policy
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      role: db
+  ingress:  # 表示入规则
+  - from:
+    - podSelector:  # 只允许具有role=frontend标签的Pod访问
+        matchLabels:
+          role: fontend
+    ports:   # 只能使用TCP协议访问6379端口
+    - protocol: TCP
+      port: 6379
+```
+示意图如下所示：
+
+![](/assets/img/nwpl-pod.png)
+
+### 5.5.2 使用namespaceSelector
+使用namespaceSelector设置访问范围的YAML定义如下：
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: test-network-policy
+spec:
+  podSelector:
+    matchLabels:
+      role: db
+  ingress:   # 表示入规则
+  - from:
+    - namespaceSelector: # 只允许具有project=myproject标签的命名空间中的Pod访问
+        matchLabels:
+          project: myproject
+    ports:  # 只能使用TCP协议访问6379端口
+    - protocol: TCP
+      port: 6379
+```
+示意图如下所示：
+![](/assets/img/nwpl-ns.png)
+
 # 6 持久化存储
+## 6.1 Volume
+容器中的文件在磁盘上是临时存放的，当容器重建时，容器中的文件将会丢失，另外当在Pod中同时运行多个容器时，常常需要在这些容器之间共享文件，这也是容器不好解决的问题。kubernetes抽象出了Volume来解决这个两个问题，也就是存储卷，**kubernetes的Volume是Pod的一部分**,Volume不是单独的对象，不能独立创建，只能在Pod中定义。
+Pod中的所有容器都可以访问Volume，但必须要挂载，且可以挂载到容器中任何目录。
+实际中使用容器存储如下图所示，将容器的内容挂载到Volume中，通过Volume，两个容器键实现了存储共享。
+![](/assets/img/volume.png)
+Volume的生命周期与挂载它的Pod相同，但是Volume里面的文件可能在Volume消失后仍然存在，这取决于Volume的类型。
+### 6.1.1 Volume的类型
+kubernetes的Volume有非常多的类型。但实际中使用最多的类型如下：
+- emptyDir:一种简单的空目录，主要用于临时存储
+- hostPath:将主机某个目录挂载到容器中
+- ConfigMap/Secret:特殊类型，将kubernetes特定的对象类型挂载到Pod
+- persistentVolumeClaim:kubernetes的持久化存储类型
+### 6.1.2 EmptyDir
+emptyDir是最简单的一种Volume类型，根据名字就能看出，这个Volume挂载后就是一个空目录，应用程序可以在里面读写文件，emptyDir Volume的生命周期与Pod相同，Pod删除后Volume的数据也同时删掉。
+emptyDir的一些用途如下：
+- 缓存空间，例如基于磁盘的归并排序
+- 为耗时较长的计算任务提供检查点，以便任务能从崩溃前的状态恢复执行
+emptyDir配置示例如下：
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+spec:
+  containers:
+  - image: nginx:alpine
+    name: test-container
+    volumeMounts:
+    - mountPath: /cache
+      name: cache-volume
+  volumes:
+  - name: cache-volume
+    emptyDir: {}
+```
+emptyDir实际是将Volume的内容写在Pod所在节点的磁盘上。另外emptyDir也可以设置存储介质为内存，如下所示，medium设置为Memory:
+```yaml
+volumes:
+- name: html
+  emptyDir:
+    medium: Memory
+```
+### 6.1.3 HostPath
+hostPath是一种持久化存储，emptyDir里的内容会随着Pod的删除而消失，但hostPath不会，如果对应的Pod删除，hostPath Volume里的内容依然存在与节点的目录中，如果后续重新创建Pod并调度到同一个节点，挂载后依然可以读取到之前Pod写的内容。
+hostPath存储的内容与节点相关，所以它不适合想数据库这类的应用，想象如果数据库的Pod被调度到了别的节点，那读取的内容就完全不一样了。
+永远记住不要使用hostPath存储跨Pod的数据，一定要把hostPath的使用范围限制在读取节点文件上，这是因为Pod被重建后不确定调度那个节点上，写文件可能会导致前后不一致。
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-hostpath
+spec:
+  containers:
+    - image: nginx:alpine
+      name: hostpath-container
+      volumeMounts:
+        - name: test-volume
+          mountPath: /test-pd
+  volumes:
+    - name: test-volume
+      hostPath:
+        path: /data
+```
+## 6.2 PV PVC和StorageClass
+前面提到hostPath是一种持久化存储，但hostPath的内容是存储在节点上，导致只适合读取。
+### 6.2.2 PV
+如果要求Pod重新调度后仍然能使用之前读写过的数据，就只能使用网络存储了，网络存储种类非常多且有不同的使用方法，通过一个云服务提供商至少有块存储、文件存储、对象存储这三种。kubernetes解决这个问题的方式是抽象了PV(PersistentVolume)和PVC(PersistentVolumeClaim)来解耦这个问题，从而让使用者不用关心具体的基础设施，当需要存储资源的时候，，只要想CPU和内存一样，声明要多少即可。
+- PV:PV描述的是持久化存储卷，主要定义的是一个持久化存储在宿主机上的目录，比如一个NFS的挂载目录。
+- PVC:PVC描述的是Pod所希望使用的持久化存储的属性，比如，Volume存储的大小，可读写权限等等。
+kubernetes管理员设置好网络存储的类型，提供对应的PV描述符配置到kubernetes，使用者需要存储的时候只需要创建PVC，然后在Pod中使用Volume关联PVC，即可让Pod使用到存储资源，它们之间的关系如下图所示：
+![](/assets/img/pv-pvc.png)
+### 6.2.1 CSI
+Kubernetes提供了CSI接口（Container Storage Interface，容器存储接口），基于CSI这套接口，可以开发定制出CSI插件，从而支持特定的存储，达到解耦的目的。例如在Namespace：资源分组中看到的kube-system命名空间下everest-csi-controller和everest-csi-driver就是华为云CCE开发存储控制器和驱动。有了这些驱动就可以使用华为云上的EVS、SFS、OBS存储。
+```bash
+$ kubectl get po --namespace=kube-system
+NAME                                      READY   STATUS    RESTARTS   AGE
+everest-csi-controller-6d796fb9c5-v22df   2/2     Running   0          9m11s
+everest-csi-driver-snzrr                  1/1     Running   0          12m
+everest-csi-driver-ttj28                  1/1     Running   0          12m
+everest-csi-driver-wtrk6                  1/1     Running   0          12m
+```
+### 6.2.2 PV
+
+### 6.2.3 PVC
+### 6.2.4 StorageClass
+### 6.2.5 在Pod中使用PVC
 # 7 认证与授权
 # 8 弹性伸缩
 
