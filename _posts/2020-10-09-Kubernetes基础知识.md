@@ -2109,11 +2109,141 @@ everest-csi-driver-ttj28                  1/1     Running   0          12m
 everest-csi-driver-wtrk6                  1/1     Running   0          12m
 ```
 ### 6.2.2 PV
+PV是如何描述持久化存储的呢？假设在华为云SFS中创建了一个文件存储，这个文件存储ID为68e4a4fd-d759-444b-8265-20dc66c8c502，挂载地址为sfs-nas01.cn-north-4b.myhuaweicloud.com:/share-96314776。如果想在CCE中使用这个文件存储，则需要先创建一个PV来描述这个存储，如下所示：
+```yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-example
+spec:
+  accessModes:
+    - ReadWriteMany   # 读写模式
+    capacity:
+      storage: 10Gi   # 定义PV的大小
+    csi:
+      driver: nas.csi.everest.io         # 声明使用的驱动                   
+      fsType: nfs                        # 存储类型
+      volumeAttributes:
+        everest.io/share-export-location: sfs-nas01.cn-north-4b.myhuaweicloud.com:/share-96314776   # 挂载地址
+      volumeHandle: 68e4a4fd-d759-444b-8265-20dc66c8c502                                            # 存储ID
+```
+这里csi下面的内容就是华为云CCE中特定的字段，在其他地方无法使用。下面创建这个PV并查看。
+```bash
+$ kubectl create -f pv.yaml
+persistentvolume/pv-example created
 
+$ kubectl get pv
+NAME                 CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS      CLAIM    STORAGECLASS   REASON   AGE
+pv-example           10Gi       RWX            Retain           Available                                    4s
+```
+RECLAIM POLICY是指PV的回收策略，Retain表示PVC被释放后PV继续保留。STATUS值为Available，表示PV处于可用的状态。
 ### 6.2.3 PVC
+PVC可以绑定一个PV，示例如下：
+```yaml
+apiVersion: v1
+kind: PersistentVoulmeClaim
+metadata:
+  name: pvc-example
+spec:
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi   # 声明存储的大小
+  volumeName: pv-example # PV的名称
+```
+创建PVC并查看，可以看到状态是Bound,VOLUME是pv-example,表示PVC已经绑定了PV
+```bash
+$ kubectl create -f pvc.yaml
+persistentvolumeclaim/pvc-example created
+
+$ kubectl get pvc
+NAME          STATUS   VOLUME       CAPACITY   ACCESS MODES   STORAGECLASS   AGE
+pvc-example   Bound    pv-example   10Gi       RWX                           9s
+```
+再次查看PV，可以看到状态变成了Bound,CLAIM是default/pvc-example,表示这个PV绑定了default namespace下的pvc-example这个PVC。
+```bash
+$ kubectl get pv
+NAME          CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS   CLAIM                  STORAGECLASS   REASON   AGE
+pv-example    10Gi       RWX            Retain           Bound    default/pvc-example                            50s
+```
+示意图如下所示：
+![](/assets/img/pvc-bound-pv.png)
 ### 6.2.4 StorageClass
+上面提到的PV和PVC方法虽然能实现屏蔽底层存储，但是PV创建比较复杂(可以看到PV中csi字段配置很麻烦),通常是由集群管理员管理，这非常不方便。
+kubernetes解决这个问题的办法是提供动态配置PV的方法，可以自动创建PV。管理员可以部署PV配置器(provisioner),然后定义对应的StorageClass，这样开发者在创建PVC的时候就可以选择需要创建存储的类型，PVC会把StorageClass传递给PV provisioner,由provisioner自动创建PV。如CCE就提供csi-disk,csi-nas,csi-obs等StorageClass，在声明PVC加上StorageClassName，就可以自动创建PV，并自动创建底层的存储资源。
+>说明：下面是以CCE 1.15及以上版本集群使用方法举例
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata；
+  name: pvc-sfs-auto-example
+spec:
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: csi-nas  # StorageClass
+```
+创建PVC并查看PVC和PV
+```bash
+$ kubectl create -f pvc2.yaml
+persistentvolumeclaim/pvc-sfs-auto-example created
+
+$ kubectl get pvc
+NAME                   STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   AGE
+pvc-sfs-auto-example   Bound    pvc-1f1c1812-f85f-41a6-a3b4-785d21063ff3   10Gi       RWX            csi-nas        29s
+
+$ kubectl get pv
+NAME                                       CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS   CLAIM                         STORAGECLASS   REASON   AGE
+pvc-1f1c1812-f85f-41a6-a3b4-785d21063ff3   10Gi       RWO            Delete           Bound    default/pvc-sfs-auto-example  csi-nas                 20s
+```
+可以看到**使用StorageClass后,不仅创建了PVC，而且创建PV，并且将二者绑定了**
+定义了StorageClass后，就可以减少创建并维护PV的工作，PV变成了自动创建，作为使用者，只需要在声明PVC时指定StorageClassName即可，这就大大减少了工作量。
+**再次说明，StorageClassName的类型在不同厂商的产品上各不相同，这里只是使用华为云文件存储作为示例**.
+
 ### 6.2.5 在Pod中使用PVC
+有了PVC后，在Pod中使用持久化存储就非常方便了，在Pod Template中的Volume直接关联PVC的名称，然后挂载到容器中即可，如下所示。甚至在StatefulSet中可以直接声明PVC。
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - image: nginx:alpine
+        name: container-0
+        volumeMounts:
+        - mountPath: /tmp
+          name: pvc-sfs-example
+      restartPolicy: Always
+      volumes:
+      - name: pvc-sfs-example
+        persistentVolumeClaim:
+          claimName: pvc-example
+```
+
 # 7 认证与授权
+## 7.1 ServiceAccount
+### 7.1.1 认证与ServiceAccount
+### 7.1.2 创建ServiceAccount
+### 7.1.3 在Pod中使用ServiceAccount
+## 7.2 RBAC
+### 7.2.1 RBAC资源
+### 7.2.2 创建Role
+### 7.2.3 创建RoleBinding
+### 7.2.4 ClusterRole和ClusterRoleBinding
 # 8 弹性伸缩
 
 
