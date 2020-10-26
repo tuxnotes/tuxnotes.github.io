@@ -2236,16 +2236,408 @@ spec:
 
 # 7 认证与授权
 ## 7.1 ServiceAccount
+**Kubernetes中所有的访问，无论外部内部，都会通过API Server处理，访问kubernetes资源前需要经过认证与授权**
+- Authentication:用于识别用户身份的认证，**kubernetes分外部服务账号和内部服务账号，采用不同的认证机制
+- Authorization:用于控制用户对资源访问的授权，**对访问的授权目前主要使用RBAC机制**
+API Server的认证授权的示意图如下所示：
+
+![](/assets/img/auth.png)
+
 ### 7.1.1 认证与ServiceAccount
+**kubernetes账户分为服务账户(ServiceAccount)和普通账户两种类型**:
+- 服务账户与Namespace绑定，关联一套凭证，存储在Secret中，Pod创建是挂载Secret，从而允许与API server之间调用
+- kubernetes中没有代表普通账户的对象，这类账户默认由外部服务独立管理，比如在华为云上CCE的用户是有IAM管理的
+
+这里主要关注ServiceAccount
+
+ServiceAccount同样是kubernetes中的资源，与Pod，ConfigMap类似，且作用域独立的namespace，也就是ServiceAccount是属于namespace级别的，创建namespace时会自动创建一个名为default的ServiceAccount.使用下面的命令可以查看ServiceAccount
+
+```bash
+$ kubectl get sa
+NAME     SECRETS   AGE
+default  1         30d
+```
+同时kubernetes还会为ServiceAccount自动创建一个Secret，使用下面的命令查看：
+```bash
+$ kubectl describe sa default
+Name:                default
+Namespace:           default
+Labels:              <none>
+Annotations:         <none>
+Image pull secrets:  <none>
+Mountable secrets:   default-token-vssmw
+Tokens:              default-token-vssmw
+Events:              <none>
+```
+在Pod的定义文件中，可以用指定账户名称的方式将一个ServiceAccount赋值给一个Pod，如果不指定就会使用默认的ServiceAccount。当API Server接收到一个带有认证Token的请求时，API Server会用这个Token来验证发送请求的客户端所关联的ServiceAccount是否允许执行请求的操作。
 ### 7.1.2 创建ServiceAccount
+使用如下命令可以创建ServiceAccount：
+```bash
+$ kubectl create serviceaccount sa-example
+serviceaccount/sa-example created
+
+$ kubectl get sa
+NAME            SECRETS   AGE
+default         1         30d
+sa-example      1         2s
+```
+使用kubectl describe命令可以看到已经创建了与ServiceAccount相关联的Token
+```bash
+$ kubectl describe sa sa-example
+Name:                sa-example
+Namespace:           default
+Labels:              <none>
+Annotations:         <none>
+Image pull secrets:  <none>
+Mountable secrets:   sa-example-token-c7bqx
+Tokens:              sa-example-token-c7bqx
+Events:              <none>
+```
+查看Secret的内容，可以发现ca.crt,namespace和token三个数据
+```bash
+$ kubectl describe secret sa-example-token-c7bqx
+Name:         sa-example-token-c7bqx
+...
+Data
+====
+ca.crt:     1082 bytes
+namespace:  7 bytes
+token:      <Token的内容>
+```
 ### 7.1.3 在Pod中使用ServiceAccount
+Pod中使用ServiceAccount非常方便，只需要指定ServiceAccount的名称即可：
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sa-example
+spec:
+  serviceAccountName: sa-example
+  containers:
+  - image: nginx:alpine
+    name: container-0
+    resources:
+      limits:
+        cpu: 100m
+        memory: 200Mi
+      requests:
+        cpu: 100m
+        memory: 200Mi
+```
+创建并查看这个Pod，可以到Pod挂载了sa-example-token-c7bqx，也就是sa-example这个ServiceAccount对应的Token，即Pod使用这个Token来做认证。
+```bash
+$ kubectl create -f sa-pod.yaml
+pod/sa-example created
+
+$ kubectl get pod
+NAME                                       READY   STATUS              RESTARTS   AGE
+sa-example                                 0/1     running             0          5s
+
+$ kubectl describe pod sa-example
+...
+Containers:
+  sa-example:
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from sa-example-token-c7bqx (ro)
+```
+进入Pod内部，还可以看到对应的文件，如下所示：
+```bash
+$ kubectl exec -it sa-example -- /bin/sh
+/ # cd /run/secrets/kubernetes.io/serviceaccount
+/run/secrets/kubernetes.io/serviceaccount # ls
+ca.crt     namespace  token
+```
+如上所示，在容器应用中，就可以使用ca.crt和Token来访问API Server。
+下面验证一下认证是否能生效。在kubernetes集群中，默认为API Server创建了一个名为kubernetes的Service，通过这个Service就可以访问API Server。
+```bash
+$ kubectl get svc
+NAME           TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)          AGE
+kubernetes     ClusterIP   10.247.0.1       <none>        443/TCP          34
+```
+进入Pod，使用curl命令直接访问会得到如下返回信息，表示没有权限：
+```bash
+$ kubectl exec -it sa-example -- /bin/sh
+/ # curl https://kubernetes
+curl: (60) SSL certificate problem: unable to get local issuer certificate
+More details here: https://curl.haxx.se/docs/sslcerts.html
+
+curl failed to verify the legitimacy of the server and therefore could not
+establish a secure connection to it. To learn more about this situation and
+how to fix it, please visit the web page mentioned above.
+```
+使用ca.crt和Token做认证，先将ca.crt放到`CURL_CA_BUNDLE`这个环境变量中，curl命令使用`CURL_CA_BUNDLE`指定证书;在将Token的内容放到TOKEN中，然后带上TOKEN访问API Server。
+```bash
+# export CURL_CA_BUNDLE=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+# TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+# curl -H "Authorization: Bearer $TOKEN" https://kubernetes
+{
+  "kind": "Status",
+  "apiVersion": "v1",
+  "metadata": {
+
+  },
+  "status": "Failure",
+  "message": "forbidden: User \"system:serviceaccount:default:sa-example\" cannot get path \"/\"",
+  "reason": "Forbidden",
+  "details": {
+
+  },
+  "code": 403
+}
+```
+可以看到，已经能通过认证了，但是API Server返回的是cannot get path \"/\"",表示没有权限访问，这说明还需要得到授权后才能访问，授权机制将在RBAC中介绍
+
 ## 7.2 RBAC
 ### 7.2.1 RBAC资源
-### 7.2.2 创建Role
-### 7.2.3 创建RoleBinding
-### 7.2.4 ClusterRole和ClusterRoleBinding
-# 8 弹性伸缩
+kubernetes中完成授权工作的就是RBACRBAC授权规则是通过四中资源来进行配置
+- Role: 角色，其实是定义一组对kubernetes资源(Namespace级别)的访问规则
+- RoleBinding: 角色绑定，定义了用户和角色的关系
+- ClusterRole: 集群橘色，其实是定义了一组对kubernetes资源(集群级别)的访问规则
+- ClusterRoleBinding: 集群角色绑定，定义了用户和集群角色的关系
 
+Role和ClusterRole指定了可以对哪些资源做哪些动作，RoleBinding和ClusterRoleBinding将角色绑定到特定的用户，组或ServiceAccount上。关系示意图如下所示：
+
+![](/assets/img/role.png)
+
+### 7.2.2 创建Role
+Role的定义非常简单，指定namespace，然后就是rules规则。如下示例中的规则就是运行对default namespace下的Pod进行GET/LIST操作
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: default                # 命名空间
+  name: role-example
+rules:
+- apiGroups: [""]
+  resources: ["pods"]               # 可以访问Pod
+  verbs: ["get", "list"]            # 可以执行GET/LIST操作
+```
+### 7.2.3 创建RoleBinding
+有了Role之后，就可以将Role与具体的用户绑定起来，实现这个的就是RoleBinding,YAML定义如下所示：
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rolebinding-example
+  namespace: default
+subjects:                    # 指定用户
+- kind: User                 # 普通用户
+  name: user-example
+  apiGroup: rbac.authorization.k8s.io
+- kind: ServiceAccount       # ServiceAccount
+  name: sa-example
+  namespace: default
+roleRef:                     # 指定角色
+  kind: Role
+  name: role-example
+  apiGroup: rbac.authorization.k8s.io
+```
+这里的subjects就是将Role与用户绑定 起来，用户可以是外部普通用户，也可以使ServiceAccount，这两种用户类型在ServiceAccount有介绍，RoleBingding绑定Role和用户的关系如下图所示：
+
+![](/assets/img/rolebinding.png)
+
+下面验证一下授权是否生效。前面创建了一个Pod，使用了sa-eexample这个ServiceAccount，而刚刚又给sa-example绑定了role-example这个角色，现在进入到Pod，使用curl命令通过API Server访问资源来验证权限是否生效。
+使用sa-example对应的ca.crt和Token认证，查询default namespace下所有Pod资源，对应前面创建Role中yaml文件中的LIST.
+
+```bash
+$ kubectl exec -it sa-example -- /bin/sh
+# export CURL_CA_BUNDLE=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+# TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+# curl -H "Authorization: Bearer $TOKEN" https://kubernetes/api/v1/namespaces/default/pods
+{
+  "kind": "PodList",
+  "apiVersion": "v1",
+  "metadata": {
+    "selfLink": "/api/v1/namespaces/default/pods",
+    "resourceVersion": "10377013"
+  },
+  "items": [
+    {
+      "metadata": {
+        "name": "sa-example",
+        "namespace": "default",
+        "selfLink": "/api/v1/namespaces/default/pods/sa-example",
+        "uid": "c969fb72-ad72-4111-a9f1-0a8b148e4a3f",
+        "resourceVersion": "10362903",
+        "creationTimestamp": "2020-07-15T06:19:26Z"
+      },
+      "spec": {
+...
+```
+返回结果正常，说明sa-example是有LIST Pod权限的。再查询一下Deployment，返回如下，说明没有访问Deployment的权限
+```bash
+# curl -H "Authorization: Bearer $TOKEN" https://kubernetes/api/v1/namespaces/default/deploymnets
+...
+  "status": "Failure",
+  "message": "deploymnets is forbidden: User \"system:serviceaccount:default:sa-example\" cannot list resource \"deploymnets\" in API group \"\" in the namespace \"default\"",
+...
+```
+**Role和RoleBinding作用的范围是命名空间**，能够做到一定程度的权限隔离，如下图所示，上面定义role-example就不能访问kube-system命名空间下的资源。
+
+![](/assets/img/role-ns.png)
+
+在上面Pod中继续访问，返回如下，说明确实没有权限。
+```bash
+# curl -H "Authorization: Bearer $TOKEN" https://kubernetes/api/v1/namespaces/kube-system/pods
+...
+  "status": "Failure",
+  "message": "pods is forbidden: User \"system:serviceaccount:default:sa-example\" cannot list resource \"pods\" in API group \"\" in the namespace \"kube-system\"",
+  "reason": "Forbidden",
+...
+```
+**在RoleBinding中，还可以绑定其他命名空间的ServiceAccount，只要在subjects字段下添加其他命名空间的ServiceAccount即可**。
+```yaml
+subjects:                                 # 指定用户
+- kind: ServiceAccount                    # ServiceAccount
+  name: coredns
+  namespace: kube-system
+```
+加入之后，kube-system下coredns这个ServiceAccount就可以GET、LIST命名空间default下的Pod了，如下图所示。
+
+跨命名空间访问
+
+![](/assets/img/role-interns.png)
+
+### 7.2.4 ClusterRole和ClusterRoleBinding
+相比Role和RoleBinding，ClusterRole和ClusterRoleBinding有如下几点不同：
+- ClusterRole和ClusterRoleBinding不用定义namespace字段
+- ClusterRole可以定义集群级别的资源
+可以看出ClusterRole和ClusterRoleBinding控制的是集群级别的权限。在Kubernetes中，默认定义了非常多的ClusterRole和ClusterRoleBinding，如下所示。
+```bash
+$ kubectl get clusterroles
+NAME                                                                   AGE
+admin                                                                  30d
+cceaddon-prometheus-kube-state-metrics                                 6d3h
+cluster-admin                                                          30d
+coredns                                                                30d
+custom-metrics-resource-reader                                         6d3h
+custom-metrics-server-resources                                        6d3h
+edit                                                                   30d
+prometheus                                                             6d3h
+system:aggregate-customedhorizontalpodautoscalers-admin                6d2h
+system:aggregate-customedhorizontalpodautoscalers-edit                 6d2h
+system:aggregate-customedhorizontalpodautoscalers-view                 6d2h
+....
+view                                                                   30d
+
+$ kubectl get clusterrolebindings
+NAME                                                   AGE
+authenticated-access-network                           30d
+authenticated-packageversion                           30d
+auto-approve-csrs-for-group                            30d
+auto-approve-renewals-for-nodes                        30d
+auto-approve-renewals-for-nodes-server                 30d
+cceaddon-prometheus-kube-state-metrics                 6d3h
+cluster-admin                                          30d
+cluster-creator                                        30d
+coredns                                                30d
+csrs-for-bootstrapping                                 30d
+system:basic-user                                      30d
+system:ccehpa-rolebinding                              6d2h
+system:cluster-autoscaler                              6d1h
+...
+```
+其中，最重要最常用的是如下四个ClusterRole。
+- view：拥有查看资源的权限
+- edit：拥有修改资源的权限
+- admin：拥有一个命名空间全部权限
+- cluster-admin：拥有集群的全部权限
+
+使用kubectl describe clusterrole命令能够查看到各个规则的具体权限。
+
+通常情况下，使用这四个ClusterRole与用户做绑定，就可以很好的做到权限隔离。这里的关键一点是理解到Role（规则、权限）与用户是分开的，只要通过Rolebinding来对这两者进行组合就能做到灵活的权限控制。
+
+# 8 弹性伸缩
+前面介绍了使用Deployment这类控制器来控制Pod的副本数量，通过调整replicas的大小就可以达到给应用手动扩缩容的目的。但是在某些实际场景下，手动调整一是繁琐，二是速度没有那么快，尤其是在应对流量洪峰需要快速弹性时无法做出快速反应。
+Kubernetes支持Pod和集群节点的自动弹性伸缩，通过设置弹性伸缩规则，当外部条件（如CPU使用率）达到一定条件时，根据规则自动伸缩Pod和集群节点。
+## 8.1 Prometheus与Metrics Server
+想要做到自动弹性伸缩，先决条件就是能感知到各种运行数据，例如集群节点、Pod、容器的CPU、内存使用率等等。而这些数据的监控能力Kubernetes也没有自己实现，而是通过其他项目来扩展Kubernetes的能力。
+- Prometheus是一套开源的系统监控报警框架，能够采集丰富的Metrics（度量数据），目前已经基本是Kubernetes的标准监控方案。
+- Metrics Server是Kubernetes集群范围资源使用数据的聚合器。Metrics Server从kubelet公开的Summary API中采集度量数据，能够收集包括了Pod、Node、容器、Service等主要Kubernetes核心资源的度量数据，且对外提供一套标准的API。
+
+使用HPA（Horizontal Pod Autoscaler）配合Metrics Server可以实现基于CPU和内存的自动弹性伸缩，再配合Prometheus还可以实现自定义监控指标的自动弹性伸缩。
+## 8.2 HPA工作机制
+HPA（Horizontal Pod Autoscaler）是用来控制Pod水平伸缩的控制器，HPA周期性检查Pod的度量数据，计算满足HPA资源所配置的目标数值所需的副本数量，进而调整目标资源（如Deployment）的replicas字段。HPA工作机制如下图所示：
+
+![](/assets/img/hpa.png)
+
+HPA可以配置单个和多个度量指标，配置单个度量指标时，只需要对Pod的当前度量数据求和，除以期望目标值，然后向上取整，就能得到期望的副本数。例如有一个Deployment控制有3个Pod，每个Pod的CPU使用率是70%、50%、90%，而HPA中配置的期望值是50%，计算期望副本数=（70 + 50 + 90）/50 = 4.2，向上取整得到5，即期望副本数就是5。
+如果是配置多个度量指标，则会分别计算单个度量指标的期望副本数量，然后取其中最大值，就是最终的期望副本数量。
+
+## 8.3 使用HPA
+下面通过示例演示HPA的使用。首先使用Nginx镜像创建一个4副本的Deployment。
+
+```bash
+$ kubectl get deploy
+NAME               READY     UP-TO-DATE   AVAILABLE   AGE
+nginx-deployment   4/4       4            4           77s
+
+$ kubectl get pods
+NAME                                READY     STATUS    RESTARTS   AGE
+nginx-deployment-7cc6fd654c-5xzlt   1/1       Running   0          82s
+nginx-deployment-7cc6fd654c-cwjzg   1/1       Running   0          82s
+nginx-deployment-7cc6fd654c-dffkp   1/1       Running   0          82s
+nginx-deployment-7cc6fd654c-j7mp8   1/1       Running   0          82s
+```
+创建一个HPA，期望CPU的利用率为70%，副本数的范围是1-10。
+
+```yaml
+apiVersion: autoscaling/v2beta1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: scale
+  namespace: default
+spec:
+  maxReplicas: 10                    # 目标资源的最大副本数量
+  minReplicas: 1                     # 目标资源的最小副本数量
+  metrics:                           # 度量指标，期望CPU的利用率为70%
+  - resource:
+      name: cpu
+      targetAverageUtilization: 70
+    type: Resource
+  scaleTargetRef:                    # 目标资源
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nginx-deployment
+```
+创建后HPA查看:
+```bash
+$ kubectl create -f hpa.yaml
+horizontalpodautoscaler.autoscaling/celue created
+
+$ kubectl get hpa
+NAME      REFERENCE                     TARGETS   MINPODS   MAXPODS   REPLICAS   AGE
+scale     Deployment/nginx-deployment   0%/70%    1         10        4          18s
+```
+可以看到，TARGETS的期望值是70%，而实际是0%，这就意味着HPA会做出缩容动作，期望副本数量=(0+0+0+0)/70=0，但是由于最小副本数为1，所以Pod数量会调整为1。等待一段时间，可以看到Pod数量变为1。
+```bash
+$ kubectl get pods
+NAME                                READY     STATUS    RESTARTS   AGE
+nginx-deployment-7cc6fd654c-5xzlt   1/1       Running   0          7m41s
+```
+查看HPA详情，可以在Events里面看到这样一条记录。这表示HPA在21秒前成功的执行了缩容动作，新的Pod数量为1，原因是所有度量数量都比目标值低。
+```bash
+$ kubectl describe hpa scale
+...
+Events:
+  Type    Reason             Age   From                       Message
+  ----    ------             ----  ----                       -------
+  Normal  SuccessfulRescale  21s   horizontal-pod-autoscaler  New size: 1; reason: All metrics below target
+```
+如果再查看Deployment的详情，可以在Events里面看到这样一条记录。这表示Deployment的副本数量被设置为1了，跟HPA中看到的一致。
+
+```bash
+$ kubectl describe deploy nginx-deployment
+...
+Events:
+  Type    Reason             Age   From                   Message
+  ----    ------             ----  ----                   -------
+  Normal  ScalingReplicaSet  7m    deployment-controller  Scaled up replica set nginx-deployment-7cc6fd654c to 4
+  Normal  ScalingReplicaSet  1m    deployment-controller  Scaled down replica set nginx-deployment-7cc6fd654c to 1
+```
+## 8.4 Cluster AutoScaler
+HPA是针对Pod级别的，但是如果集群的资源不够了，那就只能对节点进行扩容了。集群节点的弹性伸缩本来是一件非常麻烦的事情，但是好在现在的集群大多都是构建在云上，云上可以直接调用接口添加删除节点，这就使得集群节点弹性伸缩变得非常方便。
+Cluster Autoscaler是Kubernetes提供的集群节点弹性伸缩组件，根据Pod调度状态及资源使用情况对集群的节点进行自动扩容缩容。由于要调用云上接口实现弹性伸缩，这就使得在不同环境上的实现与使用各不相同，这里不详细介绍。
 
 
 
