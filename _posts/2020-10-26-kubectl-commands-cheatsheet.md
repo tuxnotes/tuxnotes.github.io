@@ -96,6 +96,7 @@ for n in $(kubectl get nodes -l your_label_key=your_label_value --no-headers | c
  kubectl get pods --sort-by="{.status.containerStatuses[:1].restartCount}"
  ```
  filtering by nodeName using — template flag:
+
  ```bash
  $ kubectl get nodes
   NAME                         STATUS                     AGE
@@ -110,6 +111,7 @@ for n in $(kubectl get nodes -l your_label_key=your_label_value --no-headers | c
   node-exporter-0000
   prometheus-000
 ```
+
 ### Check pods which are not Runnning
 ```bash
 kubectl get pods --field-selector=status.phase!=Running --all-namespaces
