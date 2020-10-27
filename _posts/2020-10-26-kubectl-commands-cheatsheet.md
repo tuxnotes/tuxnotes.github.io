@@ -90,26 +90,26 @@ getting pods on nodes using label filter:
 for n in $(kubectl get nodes -l your_label_key=your_label_value --no-headers | cut -d " " -f1); do 
         kubectl get pods --all-namespaces  --no-headers --field-selector spec.nodeName=${n} 
   done
- ```
- sorting pods by number of restarts:
- ```bash
- kubectl get pods --sort-by="{.status.containerStatuses[:1].restartCount}"
- ```
- filtering by nodeName using — template flag:
+```
+sorting pods by number of restarts:
+```bash
+kubectl get pods --sort-by="{.status.containerStatuses[:1].restartCount}"
+```
+filtering by nodeName using — template flag:
 
- ```
- $ kubectl get nodes
-  NAME                         STATUS                     AGE
-  ip-254-0-90-30.ec2.internal   Ready                      2d
-  ip-254-0-90-35.ec2.internal   Ready                      2d
-  ip-254-0-90-50.ec2.internal   Ready,SchedulingDisabled   2d
-  ip-254-0-91-60.ec2.internal   Ready                      2d
-  ip-254-0-91-65.ec2.internal   Ready                      2d
- $ kubectl get pods --template '{{range .items}}{{if eq .spec.nodeName "ip-254-0-90-30.ec2.internal"}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}'
-  filebeat-000
-  app-0000
-  node-exporter-0000
-  prometheus-000
+```
+$ kubectl get nodes
+ NAME                         STATUS                     AGE
+ ip-254-0-90-30.ec2.internal   Ready                      2d
+ ip-254-0-90-35.ec2.internal   Ready                      2d
+ ip-254-0-90-50.ec2.internal   Ready,SchedulingDisabled   2d
+ ip-254-0-91-60.ec2.internal   Ready                      2d
+ ip-254-0-91-65.ec2.internal   Ready                      2d
+$ kubectl get pods --template '{{range .items}}{{if eq .spec.nodeName "ip-254-0-90-30.ec2.internal"}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}'
+ filebeat-000
+ app-0000
+ node-exporter-0000
+ prometheus-000
 ```
 
 ### Check pods which are not Runnning
