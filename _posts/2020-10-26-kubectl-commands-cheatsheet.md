@@ -105,7 +105,7 @@ $ kubectl get nodes
  ip-254-0-90-50.ec2.internal   Ready,SchedulingDisabled   2d
  ip-254-0-91-60.ec2.internal   Ready                      2d
  ip-254-0-91-65.ec2.internal   Ready                      2d
-$ kubectl get pods --template '{{range .items}}{{if eq .spec.nodeName "ip-254-0-90-30.ec2.internal"}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}'
+$ kubectl get pods --template '\{\{range .items\}\}\{\{if eq .spec.nodeName "ip-254-0-90-30.ec2.internal"\}\}\{\{.metadata.name\}\}\{\{"\n"\}\}\{\{end\}\}\{\{end\}\}'
  filebeat-000
  app-0000
  node-exporter-0000
