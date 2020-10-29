@@ -60,6 +60,7 @@ for _, name := range names {
 ### map实现set
 
 golang没有set类型，因为map的key的唯一性，利用这个特性可实现集合：
+
 ```go
 func main() {
 seen := make(map[string]bool) // a set of strings
@@ -76,4 +77,4 @@ if err := input.Err() err != nil {
     os.Exit(1)
 }
 }
-
+```
