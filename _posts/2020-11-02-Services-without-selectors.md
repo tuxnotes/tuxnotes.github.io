@@ -48,4 +48,4 @@ Endpoint对象的名称必须是一个有效的DNS subdomain name
 Endpoint IP地址列表表也不能是其他kubernetes集群中service的cluster IP，因为kube-proxy不支持将虚拟IP作为destination.
 
 
-对没有selector的service进行访问时与有selector的service的访问方式相同，如上示例，刘玲会被路由到YAML文件中敌营的单个endpoint:`192.0.2.42：9376`(TCP).
+endpoints与service的名称相同，都是my-service。对没有selector的service进行访问时与有selector的service的访问方式相同，如上示例，流量会被路由到YAML文件中定义的单个endpoint:`192.0.2.42：9376`(TCP).
