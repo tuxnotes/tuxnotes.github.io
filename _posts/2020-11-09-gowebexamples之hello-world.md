@@ -31,3 +31,33 @@ http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 })
 ```
 
+### Listen for HTTP Connections监听HTTP连接
+
+只有请求Handler并不能接受HTTP连接.HTTP server 必须监听一个端口，将连接传给请求Handler。因为80端口大多数情况下是HTTP流量的默认端口，所以webserver可以监听这个端口。
+
+下面的代码在启动go默认的HTTP服务时会监听80端口。你可以打开浏览器，输入`http://localhost/`来查看server处理你的请求。
+
+```go
+http.ListenAndServe(":80", nil)
+```
+
+### 代码
+
+本节中完整的代码如下：
+
+```go
+package main
+
+import (
+    "fmt"
+    "net/http"
+)
+
+func main() {
+    http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        fmt.Fprintf(w, "Hello, you've requested: %s\n", r.URL.Path)
+    })
+    http.ListenAndServe(":80", nil)
+}
+```
+>NOTE:某些Linux系统，如debian 10，使用普通用户执行这段代码的时候，可能出现执行后就退出了，这是因为要监听端口，权限的问题，可编译后使用sudo执行
