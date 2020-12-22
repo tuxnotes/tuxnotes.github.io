@@ -109,3 +109,142 @@ $
 go命令根据给定的module path请求对应的HTTPS URL，并读取返回的HTML中的元数据来定位仓库。很多服务已经提供了仓库中go源代码的数据，所以使你的module能被其他人访问的最简单的办法是让module path能匹配到仓库的地址。
 
 ## 1.4 Importing packages from your module 从你的模块中导入包
+
+接下来编写一个名为morestrings的package，并在hello程序中使用它。首先为包创建一个目录$HOME/hello/morestrings。接着在此目录中创建名为reverse.go文件，并写入如下内容：
+
+```go
+// Package morestrings implements additional functions to manipulate UTF-8
+// encoded strings, beyond what is provided in the standard "strings" package.
+package morestrings
+
+// ReverseRunes returns its argument string reversed rune-wise left to right.
+func ReverseRunes(s string) string {
+	r := []rune(s)
+	for i, j := 0, len(r)-1; i < len(r)/2; i, j = i+1, j-1 {
+		r[i], r[j] = r[j], r[i]
+	}
+	return string(r)
+}
+```
+因为我们的ReverseRunes函数是已大写字母开头，因此是可导出的，即可以被其他的包通过import morestrings来使用。
+
+接下来通过使用go build来测试包的编译
+
+```bash
+$ cd $HOME/hello/morestrings
+$ go build
+$
+```
+
+上面的命令不会产生文件，取而代之的是将编译后的包保存在本地的build cache中。
+
+在确认morestrings包编译成功后，让我们在hello程序中使用它。为了使用它，我们首先需要修改原来的$HOME/hello/hello.go文件来使用morestrings包。
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"example.com/user/hello/morestrings"
+)
+
+func main() {
+	fmt.Println(morestrings.ReverseRunes("!oG ,olleH"))
+}
+```
+
+接着安装hello程序
+
+```bash
+$ go install example.com/user/hello
+```
+
+运行新版本的程序，你将看到一个新的反序的信息：
+
+```bash
+$ hello
+Hello, Go!
+```
+## 1.5 Importing packages from remote modules从远程模块中导入包
+
+一个导入路径描述了如何通过版本控制系统如git或Mercurial来获取包中的源码。go工具使用这个特性来获取远程仓库的包。比如在你的程序中使用github.com/google/go-cmp/cmp
+
+```bash
+package main
+
+import (
+	"fmt"
+
+	"example.com/user/hello/morestrings"
+	"github.com/google/go-cmp/cmp"
+)
+
+func main() {
+	fmt.Println(morestrings.ReverseRunes("!oG ,olleH"))
+	fmt.Println(cmp.Diff("Hello World", "Hello Go"))
+}
+```
+当你运行命令如go install, go build, go run时，go命令会自动下载远程模块并在你的go.mod文件中记录它的版本
+
+```bash
+$ go install example.com/user/hello
+go: finding module for package github.com/google/go-cmp/cmp
+go: downloading github.com/google/go-cmp v0.4.0
+go: found github.com/google/go-cmp/cmp in github.com/google/go-cmp v0.4.0
+$ hello
+Hello, Go!
+  string(
+- 	"Hello World",
++ 	"Hello Go",
+  )
+$ cat go.mod
+module example.com/user/hello
+
+go 1.14
+
+require github.com/google/go-cmp v0.4.0
+$
+```
+模块以来会自动下载到GOPATH目录中的pkg/mod子目录中。对于给定版本的模块的下载内容，在所有依赖这个版本模块的其他模块是共享的，所以go命令会将这些文件和目录标记为只读。如果要清楚所有下载的模块，需要给go clean命令指定-modcahce选项：
+
+```bash
+$ go clean -modcache
+$
+```
+
+## 1.6 test测试
+
+Go有一个有go test命令和testing包组成的轻量级测试框架。你可以创建一个已_test.go结尾的文件来写一个测试，这个文件需要包含名为`TestXXX`的函数，函数签名为`func (t *test.T)`。测试框架会运行每个测试函数。如果测试函数调用了失败函数如t.Error或t.Fail，则认为测试没有通过。
+
+为morestrings包创建一个测试，首选需要创建文件$HOME/hello/morestrings/reverse_test.go，并写入如下代码：
+
+```go
+package morestrings
+
+import "testing"
+
+func TestReverseRunes(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"Hello, world", "dlrow ,olleH"},
+		{"Hello, 世界", "界世 ,olleH"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		got := ReverseRunes(c.in)
+		if got != c.want {
+			t.Errorf("ReverseRunes(%q) == %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+```
+接着使用go test运行测试：
+
+```bash
+$ go test
+PASS
+ok  	example.com/user/morestrings 0.165s
+$
+```
