@@ -72,5 +72,11 @@ openssh客户端配置文件中的LocalForward选项可用于胚子端口转发�
 
 ### 6.2 Remote Forwarding远程转发
 
+在openssh中，远程ssh端口转发通过-R选项指定，如：
+```
+ssh -R 8080:localhost:80 public.example.com
+```
+这允许任何在远程服务器上的人连接到远程服务器的8080端口。这个连接将被转发到客户端主机，接着客户端或建立一个到localhost的80端口的连接。任何其他主机名或IP地址可替换localhost来指定要连接的主机。
 
+这个例子在给一些外网的人访问内部webserver的情况非常有用。或者是暴露内部的web应用到公网。
 
