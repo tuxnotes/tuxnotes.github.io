@@ -80,3 +80,27 @@ ssh -R 8080:localhost:80 public.example.com
 
 这个例子在给一些外网的人访问内部webserver的情况非常有用。或者是暴露内部的web应用到公网。
 
+默认情况下，openssh仅允许来自server主机连接的远程端口转发。但是服务器端的配置文件sshd_config中`GatewayPorts`选项可用于控制这个。可选的配置如下：
+
+```
+GatewayPorts no
+```
+
+这阻止来非ssh server主机的端口转发
+
+```
+GatewayPorts yes
+```
+允许任何连接的端口转发。如果服务器是在公网，则互联网上的任何人都能连接到这个端口。
+
+```
+GatewayPorts clientspecified
+```
+上面的配置意思是客户端指定的用于连接到端口的IP地址是被允许的。语法如下：
+```
+ssh -R 52.194.1.73:8080:localhost:80 host147.aws.example.com
+```
+这个例子的意思是只有来自IP地址为52.194.1.73到8080端口的连接才被允许。
+
+
+
