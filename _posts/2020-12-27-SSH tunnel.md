@@ -102,5 +102,13 @@ ssh -R 52.194.1.73:8080:localhost:80 host147.aws.example.com
 ```
 这个例子的意思是只有来自IP地址为52.194.1.73到8080端口的连接才被允许。
 
+更多信息以及动态转发的信息请参考下面的网站：
 
+- https://www.tecmint.com/create-ssh-tunneling-port-forwarding-in-linux/
+- https://www.linuxbabe.com/firewall/ssh-dynamic-port-forwarding
+- https://www.booleanworld.com/guide-ssh-port-forwarding-tunnelling/
+- https://netsec.ws/?p=278
+- https://www.howtogeek.com/168145/how-to-use-ssh-tunneling/
+- https://linuxize.com/post/how-to-setup-ssh-tunneling/
+- https://dev.to/__namc/ssh-tunneling---local-remote--dynamic-34fa
 
