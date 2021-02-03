@@ -1,6 +1,6 @@
 ---
 layout: post
-title: Stack and Heap: In a Nutshell-译
+title: Stack-and-Heap-In-a-Nutshell-译
 date: 2021-02-02
 author: tux
 tags: java
