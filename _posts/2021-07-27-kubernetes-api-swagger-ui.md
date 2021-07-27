@@ -14,3 +14,7 @@ tags: Kubernetes
 # docker run -d --restart=always -p 7070:8080 -e SWAGGER_JSON=/k8s-swagger.json -v $(pwd)/k8s-swagger.json:/k8s-swagger.json swaggerapi/swagger-ui:latest
 ```
 
+Reference
+
+- https://jonnylangefeld.com/blog/kubernetes-how-to-view-swagger-ui 
+
