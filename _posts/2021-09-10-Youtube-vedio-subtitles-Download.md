@@ -1,8 +1,10 @@
+---
 layout: post
 title: Youtube Vedio Subtiles Download
 author: tux
 date: 2021-09-08
-tags: Linux
+tags: Linux Command
+---
 
 # 简介
 
