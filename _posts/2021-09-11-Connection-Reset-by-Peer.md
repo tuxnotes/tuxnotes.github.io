@@ -86,6 +86,10 @@ WebLogic Server Java Virtual Machine (JVM) Tuning and Garbage Collection (see li
 
 http://www-1.ibm.com/support/docview.wss?rs=3214&context=SSLKT6&uid=swg21262003&loc=en_US&cs=utf-8&lang=en
 
+# 工作中遇到此问题的原因
+
+keepalived的健康检查脚本逻辑是看本机是否监听tcp端口，脚本中使用到了`netstat -tln |grep PORT`命令来检查。但是当机器作为网关的时候，netstat命令返回需要等待很长的时间，这导致超时，keepalived将VIP进行了切换，所以出现了connection reset by peer.
+
 # Reference
 
 - https://www.ibm.com/support/pages/connection-reset-peer-socket-write-error-error-message
