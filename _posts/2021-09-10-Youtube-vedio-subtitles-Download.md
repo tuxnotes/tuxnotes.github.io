@@ -17,6 +17,7 @@ tags: Linux Command
 ```bash
 sudo pip3 install you-get # 用于从B站下载视频
 sudo pip3 install youtube-dl # 用于从youtube网站下载视频
+sudo pip3 install bilili # you-get目前有问题，bilili也可以从B站下载视频，但线程数不要太大，线程数设置为2是比较稳定的
 ```
 
 ## 使用
@@ -33,7 +34,16 @@ you-get -l --format=dash-flv720 URL # 当链接包含多个视频时(有多集),
 ```bash
 youtube-dl -f best --proxy socks5://127.0.0.1:1080 URL # URL可以使用单引号括起来，因为URL中可能包含&符号
 ```
+`bilili`下载B站视频
 
+```bash
+bilili -n 2 URL
+```
+具体使用方式可以参考文档：
+
+- https://bilili.nyakku.moe/cli/
+- https://pypi.org/project/bilili/
+  
 附YouTube的网站下载方式：
 
 - https://savesubs.com/zh # 下载字幕
