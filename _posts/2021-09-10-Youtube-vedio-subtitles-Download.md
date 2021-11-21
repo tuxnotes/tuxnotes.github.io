@@ -33,11 +33,13 @@ you-get -l --format=dash-flv720 URL # 当链接包含多个视频时(有多集),
 
 ```bash
 youtube-dl -f best --proxy socks5://127.0.0.1:1080 URL # URL可以使用单引号括起来，因为URL中可能包含&符号
+youtube-dl -f best --yes-playlist --proxy socks5://127.0.0.1:1080 URL
+youtube-dl -f best --yes-playlist --playlist-start 2 --proxy socks5://127.0.0.1:1080 URL # 从第2个视频开始，第一个视频编号为1.--playlist-end指定结束下载第几个视频，默认是最后一个
 ```
 `bilili`下载B站视频
 
 ```bash
-bilili -n 2 URL
+bilili -n 2 -q 74 URL # 74表示视频质量为720p
 ```
 具体使用方式可以参考文档：
 
