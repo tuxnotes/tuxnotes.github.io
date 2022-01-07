@@ -36,6 +36,58 @@ youtube-dl -f best --proxy socks5://127.0.0.1:1080 URL # URL可以使用单引�
 youtube-dl -f best --yes-playlist --proxy socks5://127.0.0.1:1080 URL
 youtube-dl -f best --yes-playlist --playlist-start 2 --proxy socks5://127.0.0.1:1080 URL # 从第2个视频开始，第一个视频编号为1.--playlist-end指定结束下载第几个视频，默认是最后一个
 ```
+使用如下命令确定视频提供的质量格式
+```bash
+sudo youtube-dl -F https://www.youtube.com/watch?v=ECIU3SQyUU4
+
+ ECIU3SQyUU4: Downloading webpage
+ ECIU3SQyUU4: Extracting video information
+ ECIU3SQyUU4: Downloading js player do
+ ECIU3SQyUU4: Downloading DASH manifest
+[info] Available formats for ECIU3SQyUU4:
+format code extension resolution  note
+171         webm      audio only  DASH audio , audio@128k (worst)
+140         m4a       audio only  DASH audio , audio@128k
+139         m4a       audio only  DASH audio   49k , audio@ 48k (22050Hz), 1.19MiB
+140         m4a       audio only  DASH audio  129k , audio@128k (44100Hz), 3.16MiB
+171         webm      audio only  DASH audio  132k , audio@128k (44100Hz), 3.08MiB
+172         webm      audio only  DASH audio  191k , audio@256k (44100Hz), 4.33MiB
+141         m4a       audio only  DASH audio  255k , audio@256k (44100Hz), 6.27MiB
+160         mp4       144p        DASH video , video only
+278         webm      256x144     DASH video   96k , webm container, VP9, 1fps, video only, 2.14MiB
+160         mp4       256x144     DASH video  111k , 13fps, video only, 2.70MiB
+242         webm      240p        DASH video , video only
+133         mp4       240p        DASH video , video only
+242         webm      426x240     DASH video  223k , 1fps, video only, 4.62MiB
+133         mp4       426x240     DASH video  253k , 25fps, video only, 6.00MiB
+243         webm      360p        DASH video , video only
+134         mp4       360p        DASH video , video only
+243         webm      640x360     DASH video  397k , 1fps, video only, 8.30MiB
+134         mp4       640x360     DASH video  620k , 25fps, video only, 13.78MiB
+244         webm      480p        DASH video , video only
+135         mp4       480p        DASH video , video only
+244         webm      854x480     DASH video  798k , 1fps, video only, 16.47MiB
+135         mp4       854x480     DASH video 1117k , 25fps, video only, 25.52MiB
+247         webm      720p        DASH video , video only
+136         mp4       720p        DASH video , video only
+247         webm      1280x720    DASH video 1476k , 1fps, video only, 30.38MiB
+136         mp4       1280x720    DASH video 2246k , 25fps, video only, 49.86MiB
+248         webm      1080p       DASH video , video only
+137         mp4       1080p       DASH video , video only
+248         webm      1920x1080   DASH video 2427k , 1fps, video only, 50.28MiB
+137         mp4       1920x1080   DASH video 4176k , 25fps, video only, 96.17MiB
+17          3gp       176x144
+36          3gp       320x240
+5           flv       400x240
+43          webm      640x360
+18          mp4       640x360
+22          mp4       1280x720    (best)
+```
+因为这是个音乐 MV，所以音质也可以选最好的，我们想下载 1080p 的 mp4 格式，注意 video 的 ID 是 137，audio 的 ID 是 141.使用如下命令下载
+```bash
+sudo youtube-dl -f 137+141 https://www.youtube.com/watch?v=ECIU3SQyUU4
+```
+
 `bilili`下载B站视频
 
 ```bash
